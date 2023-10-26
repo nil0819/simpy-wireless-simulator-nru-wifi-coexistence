@@ -4,7 +4,6 @@ import sys
 from simulation import *
 
 
-
 @click.command()
 @click.option("-r", "--runs", "runs", default=10, help="Number of simulation runs")
 @click.option("--seed", "seed", default=1, help="Seed for simulation")
@@ -42,8 +41,8 @@ from simulation import *
 @click.option("-min_des", "--min_sync_slot_desync", default=0, help="Min value of gNB desynchronization")
 @click.option("-nru_obser_slots", "--nru_observation_slot", default=3, help="amount of observation slots for NR_U")
 @click.option("--mcot", default=6, help="Max channel occupancy time for NR-U (ms)")
-@click.option("--rogue","rogue_wifi",default=False,help="Presence of rogue Wi-Fi AP(True/False)")
-
+@click.option("--rogue", "rogue_wifi", default=False, help="Presence of rogue Wi-Fi AP(True/False)")
+@click.option("-n_t_p", "nru_transmission_prob", default=100, help="Transmission probability of NR-U. Helps to show the attack probability. attack probability= (100-trasmission probability)/100")
 def single_run(
         runs: int,
         seed: int,
@@ -62,24 +61,26 @@ def single_run(
         min_sync_slot_desync: int,
         nru_observation_slot: int,
         mcot: int,
-        rogue_wifi: bool
+        rogue_wifi: bool,
+        nru_transmission_prob: int
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
-    airtime_control = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
+    airtime_control = {"Station {}".format(
+        i): 0 for i in range(1, ap_number + 1)}
     airtime_data_NR = {"Gnb {}".format(i): 0 for i in range(1, gnb_number + 1)}
-    airtime_control_NR = {"Gnb {}".format(i): 0 for i in range(1, gnb_number + 1)}
+    airtime_control_NR = {"Gnb {}".format(
+        i): 0 for i in range(1, gnb_number + 1)}
 
     for i in range(0, runs):
         curr_seed = seed + i
         print("before simulation")
         run_simulation(ap_number, gnb_number, curr_seed, simulation_time,
-                       Config(1472, wifi_cw_min, wifi_cw_max, wifi_r_limit, mcs_value),
-                       Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync, min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot),
-                       backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR,rogue_wifi)
-
-
-
+                       Config(1472, wifi_cw_min, wifi_cw_max,
+                              wifi_r_limit, mcs_value),
+                       Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync,
+                                 min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot),
+                       backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR, rogue_wifi,nru_transmission_prob)
 
 
 if __name__ == "__main__":

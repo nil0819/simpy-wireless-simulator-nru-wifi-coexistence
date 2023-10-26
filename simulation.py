@@ -22,7 +22,8 @@ def run_simulation(
         airtime_control: Dict[str, int],
         airtime_data_NR: Dict[str, int],
         airtime_control_NR: Dict[str, int],
-        is_rogue_wifi: bool
+        is_rogue_wifi: bool,
+        nru_transmission_prob: int
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -43,7 +44,7 @@ def run_simulation(
     # is_wifi_rogue = 0 if rogue_wifi else 1
 
     # print(is_wifi_rogue)
-
+    channel.nru_transmission_probability = nru_transmission_prob
     if is_rogue_wifi:
         print(is_rogue_wifi)
         print("Rogue WiFi")

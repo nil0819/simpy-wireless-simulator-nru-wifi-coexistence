@@ -31,3 +31,7 @@ class Channel:
     bytes_sent: int = 0  # total bytes sent
     failed_transmissions_NR: int = 0  # total failed transmissions
     succeeded_transmissions_NR: int = 0  # total succeeded transmissions
+
+
+    #NR-U gnb victim attack probability
+    nru_transmission_probability: int =100
