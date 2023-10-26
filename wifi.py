@@ -97,6 +97,7 @@ class WiFi:
                     self.first_interrupt = False
 
     def send_frame(self):
+        self.log_nru_minislot_busy_count()
         self.channel.tx_list.append(self)  # add station to currently transmitting list
         res = self.channel.tx_queue.request(
             priority=(big_num - self.frame_to_send.frame_time))  # create request basing on this station frame length
@@ -199,3 +200,14 @@ class WiFi:
         self.channel.bytes_sent += self.frame_to_send.data_size
         self.channel.airtime_data[self.name] += self.frame_to_send.frame_time
         return True
+    
+    def log_nru_minislot_busy_count(self):
+        busy_slot_time = (self.env.now-self.channel.minislot_log_start_time) % 500
+
+        if busy_slot_time <= 495:
+            busy_slot = (busy_slot_time//9)
+        else:
+            busy_slot = (busy_slot_time//9)-1
+        
+        self.channel.nru_minislot_busy_log[busy_slot] = self.channel.nru_minislot_busy_log[busy_slot]+1
+    

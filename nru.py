@@ -70,33 +70,75 @@ class Gnb:
         #channel access delay calculation
         self.channel_access_delay = 0
         self.channel_access_attempt_start = 0
+
+        
+
+        #NR-U minislot specific busy count log
+        #self.minislot_log_start_time = 0
         
 
     def start(self):
 
-        # yield self.env.timeout(self.desync)
+        #yield self.env.timeout(self.desync)
         while True:
             # self.transmission_to_send = self.gen_new_transmission()
             was_sent = False
             while not was_sent:
                 if gap:
+                    #print("Backoff Starts ", self.env.now)
                     transmission_prob = random.randint(0, 100)
-                    self.process = self.env.process(self.wait_back_off_gap())
-                    yield self.process
+                    #print(self.channel.nru_transmission_probability)
 
                     if transmission_prob <= self.channel.nru_transmission_probability:
+                        # print("now ",self.env.now)
+                        # print("transmission prob value ",transmission_prob, " and transmitting")
+                        self.process = self.env.process(self.wait_back_off_gap())
+                        yield self.process
                         was_sent = yield self.env.process(self.send_transmission())
                     else:
+                        #print("now ",self.env.now)
+                        # print("transmission prob value ",transmission_prob, " and not transmitting")
+                        #attack model 1
+                        #attacker_start_time = 495
+                        #attack model 2
+                        attacker_start_time = random.randint(0,495)
+                        #attack model 3
+                        #attacker_start_time = random.randint(55,495)
+                        self.log_nru_minislot_busy_count(attacker_start_time)
+                        self.process = self.env.process(self.wait_back_off_gap())
+                        yield self.process
                         was_sent = yield self.env.process(self.do_not_transmit())
+                    #print("Current time: ",self.env.now," Next slot boundary: ", self.next_sync_slot_boundry)
+                    # transmission_prob = random.randint(0, 100)
+                    # attacker_start_time = random.randint(0,500)
+                    # self.attacker_trigger_time = self.env.now+attacker_start_time
+                    # self.process = self.env.process(self.wait_back_off_gap())
+                    # yield self.process
+
+                    # if transmission_prob <= self.channel.nru_transmission_probability:
+                    #     was_sent = yield self.env.process(self.send_transmission())
+                    # else:
+                    #     was_sent = yield self.env.process(self.do_not_transmit())
+                    
+                    # self.process = self.env.process(self.wait_back_off_gap())
+                    # yield self.process
+
+                    # if transmission_prob <= self.channel.nru_transmission_probability:
+                    #     was_sent = yield self.env.process(self.send_transmission())
+                    # else:
+                        
                 else:
                     self.process = self.env.process(self.wait_back_off())
                     yield self.process
                     was_sent = yield self.env.process(self.send_transmission())
 
     def do_not_transmit(self):
-
-        yield self.env.timeout(20)
-        return True
+        
+        time_remaining = self.next_sync_slot_boundry-self.env.now
+        #print("Time remaining ", time_remaining)
+        yield self.env.timeout(time_remaining)
+        #print("Now ", self.env.now)
+        return False
 
     def wait_back_off_gap(self):
         self.channel_access_attempt_start = self.env.now
@@ -251,6 +293,8 @@ class Gnb:
         # log(self, f"Selected random desync to {self.desync} us")
         # waiting randomly chosen desync time
         yield self.env.timeout(self.desync)
+        #print("Sync slot counter ending at ",self.env.now)
+        self.channel.minislot_log_start_time = self.env.now
         while True:
             self.next_sync_slot_boundry += self.config_nr.synchronization_slot_duration
             # log(self,
@@ -385,3 +429,15 @@ class Gnb:
 
         self.channel_access_delay = self.env.now - self.channel_access_attempt_start
         self.channel.nru_channel_access_delays_log[self.env.now] = self.channel_access_delay
+
+    
+    def log_nru_minislot_busy_count(self,attacker_start_time):
+        #print("Attack model 1 at ",self.env.now)
+        busy_slot_time = (self.env.now-self.channel.minislot_log_start_time+attacker_start_time) % 500
+
+        if busy_slot_time <= 495:
+            busy_slot = (busy_slot_time//9)
+        else:
+            busy_slot = ((busy_slot_time-1)//9)-5
+        
+        self.channel.nru_minislot_busy_log[busy_slot] = self.channel.nru_minislot_busy_log[busy_slot]+1

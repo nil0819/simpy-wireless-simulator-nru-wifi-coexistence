@@ -35,6 +35,10 @@ class Channel:
 
     # channel access delay calculation
     nru_channel_access_delays_log: Dict[int, int] = field(default_factory=dict)
+
+    #NR-U minislot specific busy count log
+    nru_minislot_busy_log: Dict[int, int] = field(default_factory=dict)
+    minislot_log_start_time:int = 0
     
 
     

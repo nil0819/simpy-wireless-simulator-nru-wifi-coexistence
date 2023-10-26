@@ -40,6 +40,12 @@ def run_simulation(
     )
 
     
+    #initialize the minislot log
+    for i in range(0,57):
+        channel.nru_minislot_busy_log[i] = 0
+    
+    # for i in range(0,57):
+    #     print(channel.nru_minislot_busy_log[i])
 
     # is_wifi_rogue = 0 if rogue_wifi else 1
 
@@ -207,5 +213,22 @@ def run_simulation(
 
         for key, value in channel.nru_channel_access_delays_log.items():
             writer.writerow({"channel_access_times": key, "channel_access_delay":value})
+
+
+    
+    # for key, value in channel.nru_minislot_busy_log.items():
+    #     print(key," ",value)
+
+    nru_minislot_busy_counter_log = "minislot_log\\"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+"_AP_"+str(number_of_stations)+"_GNB_"+str(number_of_gnb)+"_trprob_"+str(nru_transmission_prob)+".csv"
+
+    with open(nru_minislot_busy_counter_log,"w", newline="") as csvfile:
+
+        fieldnames = ["minislot", "count"]
+        writer = csv.DictWriter(csvfile,fieldnames=fieldnames)
+
+        writer.writeheader()
+
+        for key, value in channel.nru_minislot_busy_log.items():
+            writer.writerow({"minislot":key, "count":value})
         
         
