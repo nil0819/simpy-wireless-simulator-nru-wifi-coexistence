@@ -71,6 +71,7 @@ def single_run(
     airtime_data_NR = {"Gnb {}".format(i): 0 for i in range(1, gnb_number + 1)}
     airtime_control_NR = {"Gnb {}".format(
         i): 0 for i in range(1, gnb_number + 1)}
+    
 
     for i in range(0, runs):
         curr_seed = seed + i

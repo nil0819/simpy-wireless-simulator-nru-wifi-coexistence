@@ -67,6 +67,10 @@ class Gnb:
         self.time_to_next_sync_slot = 0
         self.waiting_backoff = False
         self.start_nr = 0
+        #channel access delay calculation
+        self.channel_access_delay = 0
+        self.channel_access_attempt_start = 0
+        
 
     def start(self):
 
@@ -95,6 +99,7 @@ class Gnb:
         return True
 
     def wait_back_off_gap(self):
+        self.channel_access_attempt_start = self.env.now
         self.back_off_time = self.generate_new_back_off_time(
             self.failed_transmissions_in_row)
         # adding pp to the backoff timer
@@ -266,6 +271,8 @@ class Gnb:
 
             if res not in result:  # check if this station got lock, if not just wait you frame time
                 raise simpy.Interrupt("There is a longer frame...")
+            
+            self.log_channel_access_delay()
 
             with self.channel.tx_lock.request() as lock:  # this station has the longest frame so hold the lock
                 yield lock
@@ -373,3 +380,8 @@ class Gnb:
         self.succeeded_transmissions += 1
         self.failed_transmissions_in_row = 0
         return True
+    
+    def log_channel_access_delay(self):
+
+        self.channel_access_delay = self.env.now - self.channel_access_attempt_start
+        self.channel.nru_channel_access_delays_log[self.env.now] = self.channel_access_delay

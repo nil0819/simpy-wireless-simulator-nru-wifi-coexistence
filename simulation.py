@@ -192,3 +192,20 @@ def run_simulation(
              p_coll,
              normalized_channel_occupancy_time_NR, normalized_channel_efficiency_NR, p_coll_NR,
              normalized_channel_occupancy_time_all, normalized_channel_efficiency_all])
+        
+    
+    # for key,value in channel.nru_channel_access_delays_log.items():
+    #     print(key," ",value)
+
+    nru_channel_access_delay_log_file = "channel_access_delay_log\\"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+"_AP_"+str(number_of_stations)+"_GNB_"+str(number_of_gnb)+"_trprob_"+str(nru_transmission_prob)+".csv"
+
+    with open(nru_channel_access_delay_log_file, "w", newline="") as csvfile:
+        fieldnames = ["channel_access_times","channel_access_delay"]
+        writer = csv.DictWriter(csvfile,fieldnames=fieldnames)
+
+        writer.writeheader()
+
+        for key, value in channel.nru_channel_access_delays_log.items():
+            writer.writerow({"channel_access_times": key, "channel_access_delay":value})
+        
+        

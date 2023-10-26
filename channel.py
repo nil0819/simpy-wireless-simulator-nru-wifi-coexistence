@@ -3,7 +3,7 @@ from wifi import *
 from nru import *
 
 
-@dataclass()
+@dataclass
 class Channel:
     # lock for the stations with the longest frame to transmit
     tx_queue: simpy.PreemptiveResource
@@ -18,20 +18,23 @@ class Channel:
     airtime_control_NR: Dict[str, int]
     # transmitting stations in the channel
     tx_list: List[WiFi] = field(default_factory=list)
-    back_off_list: List[WiFi] = field(
-        default_factory=list)  # stations in backoff phase
+    back_off_list: List[WiFi] = field(default_factory=list)  # stations in backoff phase
     # transmitting stations in the channel
     tx_list_NR: List[Gnb] = field(default_factory=list)
-    back_off_list_NR: List[Gnb] = field(
-        default_factory=list)  # stations in backoff phase
-    # problem list of station objects, what if we 2 differenet station objects???
+    back_off_list_NR: List[Gnb] = field(default_factory=list)  # stations in backoff phase
+    # problem list of station objects, what if we have 2 different station objects???
 
     failed_transmissions: int = 0  # total failed transmissions
     succeeded_transmissions: int = 0  # total succeeded transmissions
     bytes_sent: int = 0  # total bytes sent
     failed_transmissions_NR: int = 0  # total failed transmissions
     succeeded_transmissions_NR: int = 0  # total succeeded transmissions
+    
+    # NR-U gnb victim attack probability
+    nru_transmission_probability: int = 100
 
+    # channel access delay calculation
+    nru_channel_access_delays_log: Dict[int, int] = field(default_factory=dict)
+    
 
-    #NR-U gnb victim attack probability
-    nru_transmission_probability: int =100
+    
