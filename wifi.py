@@ -50,7 +50,11 @@ class WiFi:
                 self.process = self.env.process(self.wait_back_off())
                 yield self.process
                 # self.process = None
+                transmission_start_time = self.env.now
                 was_sent = yield self.env.process(self.send_frame())
+                transmission_end_time = self.env.now
+                self.log_slot_nru_not_busy(transmission_start_time,transmission_end_time)
+                #print("Wifi transmission end", self.env.now)
                 # self.process = None
 
     
@@ -98,6 +102,7 @@ class WiFi:
 
     def send_frame(self):
         self.log_nru_minislot_busy_count()
+        
         self.channel.tx_list.append(self)  # add station to currently transmitting list
         res = self.channel.tx_queue.request(
             priority=(big_num - self.frame_to_send.frame_time))  # create request basing on this station frame length
@@ -210,4 +215,13 @@ class WiFi:
             busy_slot = (busy_slot_time//9)-1
         
         self.channel.nru_minislot_busy_log[busy_slot] = self.channel.nru_minislot_busy_log[busy_slot]+1
+
+    
+    def log_slot_nru_not_busy(self, start_time, end_time):
+        #print(start_time, ": ", end_time)
+        if start_time > self.channel.minislot_log_start_time:
+            for i in range(start_time,end_time,500):
+                #print(i)
+                busy_slot_time = (i-self.channel.minislot_log_start_time) 
+                self.channel.slot_nru_active[busy_slot_time] = 0
     

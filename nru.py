@@ -83,31 +83,48 @@ class Gnb:
         while True:
             # self.transmission_to_send = self.gen_new_transmission()
             was_sent = False
+            self.channel_access_attempt_start = self.env.now
             while not was_sent:
                 if gap:
+                    self.channel.is_attacker_active = False
                     #print("Backoff Starts ", self.env.now)
                     transmission_prob = random.randint(0, 100)
                     #print(self.channel.nru_transmission_probability)
 
-                    if transmission_prob <= self.channel.nru_transmission_probability:
-                        # print("now ",self.env.now)
+                    if self.channel.attack_start <= self.env.now <= self.channel.attack_end:
+
+                        self.channel.channel_access_det_attack_active_slots.append(self.env.now)
+
+                    if transmission_prob >= self.channel.nru_transmission_probability: #and self.channel.attack_start <= self.env.now <= self.channel.attack_end:
+                        
+                        #print("is attacking", self.env.now)
                         # print("transmission prob value ",transmission_prob, " and transmitting")
-                        self.process = self.env.process(self.wait_back_off_gap())
-                        yield self.process
-                        was_sent = yield self.env.process(self.send_transmission())
-                    else:
-                        #print("now ",self.env.now)
-                        # print("transmission prob value ",transmission_prob, " and not transmitting")
+                        
                         #attack model 1
-                        #attacker_start_time = 495
+                        # attacker_start_time = 495
                         #attack model 2
-                        attacker_start_time = random.randint(0,495)
+                        #attacker_start_time = random.randint(0,495)
                         #attack model 3
-                        #attacker_start_time = random.randint(55,495)
+                        self.channel.is_attacker_active = True
+                        attacker_start_time = random.randint(55,495)
                         self.log_nru_minislot_busy_count(attacker_start_time)
                         self.process = self.env.process(self.wait_back_off_gap())
                         yield self.process
+                        #non_transmission_start_time = self.env.now
                         was_sent = yield self.env.process(self.do_not_transmit())
+                        #non_transmission_end_time = self.env.now
+
+                    else:
+                        #print("is attacking ",self.env.now)
+                        self.process = self.env.process(self.wait_back_off_gap())
+                        yield self.process
+                        transmission_start_time = self.env.now
+                        was_sent = yield self.env.process(self.send_transmission())
+                        transmission_end_time = self.env.now
+                        self.log_slot_nru_busy(transmission_start_time, transmission_end_time)
+                        #print("now ",self.env.now)
+                        # print("transmission prob value ",transmission_prob, " and not transmitting")
+                        
                     #print("Current time: ",self.env.now," Next slot boundary: ", self.next_sync_slot_boundry)
                     # transmission_prob = random.randint(0, 100)
                     # attacker_start_time = random.randint(0,500)
@@ -138,10 +155,11 @@ class Gnb:
         #print("Time remaining ", time_remaining)
         yield self.env.timeout(time_remaining)
         #print("Now ", self.env.now)
+        self.log_slot_nru_not_busy()
         return False
 
     def wait_back_off_gap(self):
-        self.channel_access_attempt_start = self.env.now
+        
         self.back_off_time = self.generate_new_back_off_time(
             self.failed_transmissions_in_row)
         # adding pp to the backoff timer
@@ -180,7 +198,7 @@ class Gnb:
                 #     f'Channels in use by {self.channel.tx_lock.count} stations')
 
                 # checking if channel if idle
-                if (len(self.channel.tx_list_NR) + len(self.channel.tx_list)) > 0:
+                if (len(self.channel.tx_list_NR) + len(self.channel.tx_list)) > 0 :
                     # log(self, 'Channel busy -- waiting to be free')
                     with self.channel.tx_lock.request() as req:
                         yield req
@@ -441,3 +459,24 @@ class Gnb:
             busy_slot = ((busy_slot_time-1)//9)-5
         
         self.channel.nru_minislot_busy_log[busy_slot] = self.channel.nru_minislot_busy_log[busy_slot]+1
+
+    def in_attack_window(self):
+        if self.channel.attack_start <= self.env.now <= self.channel.attack_end:
+            return True
+        else:
+            return False
+        
+    
+    def log_slot_nru_busy(self, start_time, end_time):
+        #print(start_time, ": ", end_time)
+        if start_time > self.channel.minislot_log_start_time:
+            for i in range(start_time,end_time,500):
+                #print(i)
+                busy_slot_time = (i-self.channel.minislot_log_start_time) 
+                self.channel.slot_nru_active[busy_slot_time] = 1
+    
+    def log_slot_nru_not_busy(self):
+        #print(start_time, ": ", end_time)
+        
+        #busy_slot_time = (i-self.channel.minislot_log_start_time) 
+        self.channel.slot_nru_active[self.next_sync_slot_boundry] = 0

@@ -1,3 +1,5 @@
 /log/
 /channel_access_delay_log/
 /minislot_log/
+/attack_log/
+/nru_busy_log/

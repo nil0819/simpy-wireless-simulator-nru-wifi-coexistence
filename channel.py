@@ -39,6 +39,23 @@ class Channel:
     #NR-U minislot specific busy count log
     nru_minislot_busy_log: Dict[int, int] = field(default_factory=dict)
     minislot_log_start_time:int = 0
+
+
+    #attack window
+    # attack_start = 1500596007
+    # attack_end = 3500596007
+    attack_start = 3500596007
+    attack_end = 6500596007
+
+    #log actual attack
+    channel_access_det_attack_active_slots = []
+
+
+    #log slot NRU active or busy
+    slot_nru_active: Dict[int, int] = field(default_factory=dict)
+
+
+    is_attacker_active = False
     
 
     

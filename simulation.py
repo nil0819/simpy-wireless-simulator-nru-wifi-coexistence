@@ -1,13 +1,10 @@
 from common import *
 from wifi import *
-from nru import * 
+from nru import *
 from channel import *
 from roguewificad import *
 from roguewifiselfbackoff import *
 from roguewifijammer import *
-
-
-
 
 
 def run_simulation(
@@ -39,11 +36,10 @@ def run_simulation(
         airtime_control_NR
     )
 
-    
-    #initialize the minislot log
-    for i in range(0,57):
+    # initialize the minislot log
+    for i in range(0, 57):
         channel.nru_minislot_busy_log[i] = 0
-    
+
     # for i in range(0,57):
     #     print(channel.nru_minislot_busy_log[i])
 
@@ -61,31 +57,26 @@ def run_simulation(
         config = Config()
 
     config_nr = Config_NR()
-    
 
     for i in range(1, number_of_stations + 1):
         if is_rogue_wifi:
             print("Rogue WiFi")
             RogueWiFiCAD(environment, "Station {}".format(i), channel, config)
-            #RogueWiFiSelfBackoff(environment, "Station {}".format(i), channel, config)
-            #RogueWiFiJammer(environment, "Station {}".format(i), channel, config)
+            # RogueWiFiSelfBackoff(environment, "Station {}".format(i), channel, config)
+            # RogueWiFiJammer(environment, "Station {}".format(i), channel, config)
         else:
             print("Benign WiFi")
             WiFi(environment, "Station {}".format(i), channel, config)
 
-        
-
     for i in range(1, number_of_gnb + 1):
         # Gnb(environment, "Gnb {}".format(i), channel, config_nr)
         Gnb(environment, "Gnb {}".format(i), channel, configNr)
-        
-        
 
     # environment.run(until=simulation_time * 1000000) 10^6 milisekundy
     environment.run(until=simulation_time * 1000000)
 
     if number_of_stations != 0:
-        if(channel.failed_transmissions + channel.succeeded_transmissions) != 0:
+        if (channel.failed_transmissions + channel.succeeded_transmissions) != 0:
             p_coll = "{:.4f}".format(
                 channel.failed_transmissions / (channel.failed_transmissions + channel.succeeded_transmissions))
         else:
@@ -198,37 +189,73 @@ def run_simulation(
              p_coll,
              normalized_channel_occupancy_time_NR, normalized_channel_efficiency_NR, p_coll_NR,
              normalized_channel_occupancy_time_all, normalized_channel_efficiency_all])
-        
-    
+
     # for key,value in channel.nru_channel_access_delays_log.items():
     #     print(key," ",value)
 
-    nru_channel_access_delay_log_file = "channel_access_delay_log\\"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+"_AP_"+str(number_of_stations)+"_GNB_"+str(number_of_gnb)+"_trprob_"+str(nru_transmission_prob)+".csv"
+    nru_channel_access_delay_log_file = "channel_access_delay_log\\"+"channel_access_delay_"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S') + \
+        "_AP_"+str(number_of_stations)+"_GNB_"+str(number_of_gnb) + \
+        "_trprob_"+str(nru_transmission_prob)+"_seed_"+str(seed)+".csv"
 
     with open(nru_channel_access_delay_log_file, "w", newline="") as csvfile:
-        fieldnames = ["channel_access_times","channel_access_delay"]
-        writer = csv.DictWriter(csvfile,fieldnames=fieldnames)
+        fieldnames = ["channel_access_times", "channel_access_delay"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         writer.writeheader()
 
         for key, value in channel.nru_channel_access_delays_log.items():
-            writer.writerow({"channel_access_times": key, "channel_access_delay":value})
-
-
+            writer.writerow({"channel_access_times": key,
+                            "channel_access_delay": value})
+            
     
+    access_delays = channel.nru_channel_access_delays_log.values()
+    average_delay = sum(access_delays) / len(access_delays)
+
+    print("The average channel access delay of NR-U is", average_delay)
     # for key, value in channel.nru_minislot_busy_log.items():
     #     print(key," ",value)
 
-    nru_minislot_busy_counter_log = "minislot_log\\"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+"_AP_"+str(number_of_stations)+"_GNB_"+str(number_of_gnb)+"_trprob_"+str(nru_transmission_prob)+".csv"
+    nru_minislot_busy_counter_log = "minislot_log\\"+"minislit_log_"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+"_AP_" + \
+        str(number_of_stations)+"_GNB_"+str(number_of_gnb)+"_trprob_" + \
+        str(nru_transmission_prob)+"_seed_"+str(seed)+".csv"
 
-    with open(nru_minislot_busy_counter_log,"w", newline="") as csvfile:
+    with open(nru_minislot_busy_counter_log, "w", newline="") as csvfile:
 
         fieldnames = ["minislot", "count"]
-        writer = csv.DictWriter(csvfile,fieldnames=fieldnames)
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         writer.writeheader()
 
         for key, value in channel.nru_minislot_busy_log.items():
-            writer.writerow({"minislot":key, "count":value})
-        
-        
+            writer.writerow({"minislot": key, "count": value})
+
+    attack_log_file = "attack_log\\"+"attack"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+"_AP_"+str(number_of_stations) + \
+        "_GNB_"+str(number_of_gnb)+"_trprob_" + \
+        str(nru_transmission_prob)+"_seed_"+str(seed)+".csv"
+
+    with open(attack_log_file, "w", newline="") as csvfile:
+        fieldnames = ["attacker_active_slots"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        writer.writeheader()
+
+        for i in channel.channel_access_det_attack_active_slots:
+            writer.writerow({"attacker_active_slots": i})
+
+    nru_busy_log = "nru_busy_log\\" + "nru_busy_log"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+"_AP_" + \
+        str(number_of_stations)+"_GNB_"+str(number_of_gnb)+"_trprob_" + \
+        str(nru_transmission_prob)+"_seed_"+str(seed)+".csv"
+    # for key,value in channel.slot_nru_active.items():
+    #     print(key,":",value)
+    with open(nru_busy_log, "w", newline="") as csvfile:
+        fieldnames = ["time", "busy"]
+
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for key, value in channel.slot_nru_active.items():
+            writer.writerow({"time": key, "busy": value})
+
+    
+    
+
