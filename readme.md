@@ -71,6 +71,53 @@ python singleRun.py --ap-number 1 --gnb-number 1 -t 1 -r 1 --mcot 10 -syn_slot 5
 python singleRun.py --ap-number 1 --gnb-number 1 -t 1 -r 1 --mcot 10 -syn_slot 500 --rogue True -wifi_cw_min 1 -wifi_cw_max 1
 
 
+
+python singleRun.py --ap-number 1 --gnb-number 1 -t 200 -r 1 --mcot 6 -syn_slot 500 
+python singleRun.py --ap-number 1 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 
+
+
+# With different attack probability
+python singleRun.py --ap-number 1 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 10
+python singleRun.py --ap-number 1 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100
+python singleRun.py --ap-number 1 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 80
+
+
+python singleRun.py --ap-number 1 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 80
+
+python singleRun.py --ap-number 1 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 20
+
+
+# benign scenarios for AP = 1 -4
+python singleRun.py --ap-number 1 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100
+python singleRun.py --ap-number 2 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100
+python singleRun.py --ap-number 3 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100
+python singleRun.py --ap-number 4 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100
+
+
+python singleRun.py --ap-number 1 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100
+python singleRun.py --ap-number 2 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100
+python singleRun.py --ap-number 3 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100
+python singleRun.py --ap-number 4 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100
+
+
+# attack scenarios for AP = 1 -4 attack_prob = 0.2
+python singleRun.py --ap-number 1 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 80
+python singleRun.py --ap-number 2 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 80
+python singleRun.py --ap-number 3 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 80
+python singleRun.py --ap-number 4 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 80
+
+
+
+# attack scenarios for AP = 1 -4 attack_prob = 0.6
+python singleRun.py --ap-number 1 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 40
+python singleRun.py --ap-number 2 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 40
+python singleRun.py --ap-number 3 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 40
+python singleRun.py --ap-number 4 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 40
+
+
+
+
+
 SEED = 1 N_stations:=2 N_gNB:=2  CW_MIN = 15 CW_MAX = 63 WiFi pcol:=0.1217 WiFi cot:=0.8879164 WiFi eff:=0.88074 gNB pcol:=0.0000 gNB cot:=0.0354 gNB eff:=0.0354  all cot:=0.9233164 all eff:=0.91614
  Wifi succ: 1631 fail: 226
  NR succ: 59 fail: 0
@@ -116,7 +163,7 @@ Options:
 
 ```
 
-##### Usage
+<!-- ##### Usage
 ```bash
 python changingNodesNumber.py --start_node_number 1 --end_node_number 2 -t 10 -r 1
 SEED = 1 N_stations:=1 N_gNB:=1  CW_MIN = 15 CW_MAX = 63 WiFi pcol:=0.0006 WiFi cot:=0.955422 WiFi eff:=0.9477 gNB pcol:=0.0244 gNB cot:=0.024 gNB eff:=0.024  all cot:=0.979422 all eff:=0.9717
@@ -128,7 +175,7 @@ SEED = 1 N_stations:=2 N_gNB:=2  CW_MIN = 15 CW_MAX = 63 WiFi pcol:=0.1217 WiFi 
  Wifi succ: 1631 fail: 226
  NR succ: 59 fail: 0
 fairness: 0.5398053473945499
-joint: 0.4984111300570852
+joint: 0.4984111300570852 -->
 ```
 
 

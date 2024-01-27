@@ -125,7 +125,7 @@ class WiFi:
                     if gnb.process.is_alive:
                         gnb.process.interrupt()
 
-                # log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
+                #log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
 
                 yield self.env.timeout(self.frame_to_send.frame_time)  # wait this station frame time
                 self.channel.back_off_list.clear()  # channel idle, clear backoff waiting list
