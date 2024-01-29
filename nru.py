@@ -71,6 +71,8 @@ class Gnb:
         self.channel_access_delay = 0
         self.channel_access_attempt_start = 0
 
+        self.waiting_gap = False
+
         
 
         #NR-U minislot specific busy count log
@@ -101,23 +103,31 @@ class Gnb:
                         # print("transmission prob value ",transmission_prob, " and transmitting")
                         
                         #attack model 1
-                        # attacker_start_time = 495
+                        attacker_start_time = 490
                         #attack model 2
                         #attacker_start_time = random.randint(0,495)
                         #attack model 3
                         self.channel.is_attacker_active = True
-                        attacker_start_time = random.randint(55,495)
+                        #attacker_start_time = random.randint(55,490)
                         self.log_nru_minislot_busy_count(attacker_start_time)
-                        self.process = self.env.process(self.wait_back_off_gap())
+                        #self.process = self.env.process(self.wait_back_off_gap())
+                        self.process = self.env.process(self.wait_back_off_gap_after())
                         yield self.process
+                        # self.process = self.env.process(self.gap_process())
+                        # yield self.process
                         #non_transmission_start_time = self.env.now
                         was_sent = yield self.env.process(self.do_not_transmit())
                         #non_transmission_end_time = self.env.now
 
                     else:
                         #print("is attacking ",self.env.now)
-                        self.process = self.env.process(self.wait_back_off_gap())
+                        #self.process = self.env.process(self.wait_back_off_gap())
+                        self.process = self.env.process(self.wait_back_off_gap_after())
                         yield self.process
+                        #print('Backoff finished at ',self.env.now)
+                        # self.process = self.env.process(self.gap_process())
+                        # yield self.process
+                        #print('Gap finished at ',self.env.now)
                         transmission_start_time = self.env.now
                         was_sent = yield self.env.process(self.send_transmission())
                         transmission_end_time = self.env.now
@@ -149,6 +159,21 @@ class Gnb:
                     yield self.process
                     was_sent = yield self.env.process(self.send_transmission())
 
+
+    def gap_process(self):
+        
+        # log(self, f"Waiting gap period of : {gap_time} us")
+        assert gap_time >= 0, "Gap period is < 0!!!"
+        try:
+            with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
+                yield req
+            gap_time = self.next_sync_slot_boundry - self.env.now+1
+            print(gap_time)
+            yield self.env.timeout(gap_time)
+        except simpy.Interrupt:
+            return
+        
+
     def do_not_transmit(self):
         
         time_remaining = self.next_sync_slot_boundry-self.env.now
@@ -157,6 +182,121 @@ class Gnb:
         #print("Now ", self.env.now)
         self.log_slot_nru_not_busy()
         return False
+    
+    def wait_back_off_gap_after(self):
+
+        self.back_off_time = self.generate_new_back_off_time(
+            self.failed_transmissions_in_row)
+        # adding pp to the backoff timer
+        m = self.config_nr.M
+        prioritization_period_time = self.config_nr.deter_period + \
+            m * self.config_nr.observation_slot_duration
+        # add Priritization Period time to bacoff procedure
+        self.back_off_time += prioritization_period_time
+
+        self.waiting_backoff = True
+
+        while self.back_off_time > -1:
+            try:
+                with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
+                    yield req
+                
+                #Calculating time to next slot boundary
+                self.time_to_next_sync_slot = self.next_sync_slot_boundry - self.env.now
+
+                while self.back_off_time >= self.time_to_next_sync_slot:
+                    self.time_to_next_sync_slot += self.config_nr.synchronization_slot_duration
+
+                
+                self.first_interrupt = True
+
+                self.start_nr = self.env.now  # store the current simulation time
+
+                
+
+                self.waiting_gap = True
+                
+                #  checking if channel if idle
+                if (len(self.channel.tx_list_NR) + len(self.channel.tx_list)) > 0:
+                    # log(self, 'Channel busy -- waiting to be free')
+                    with self.channel.tx_lock.request() as req:
+                        yield req
+                    # log(self, 'Finished waiting for free channel - restarting backoff procedure')
+                
+                elif self.waiting_backoff == True:
+                    self.channel.back_off_list_NR.append(self)
+                    self.waiting_backoff = True
+
+                     # join the environment action queue
+                    yield self.env.timeout(self.back_off_time)
+
+                    # log(self, f"Backoff waited, sending frame...")
+                    
+                    self.waiting_backoff = False
+
+                    self.channel.back_off_list_NR.remove(
+                        self)  # leave the waiting list as Backoff was waited successfully
+                    
+                
+                if self.waiting_gap == True:
+                    self.channel.back_off_list_NR.append(self)
+                    self.waiting_gap = True
+                    gap_time = self.next_sync_slot_boundry - self.env.now
+                    #print(self.next_sync_slot_boundry)
+                    # log(self, f"Waiting gap period of : {gap_time} us")
+                    assert gap_time >= 0, "Gap period is < 0!!!"
+
+                    yield self.env.timeout(gap_time)
+
+                    self.waiting_gap = False
+                    self.back_off_time = -1  # leave the loop
+
+                    
+                with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
+                    yield req
+                
+       
+            except simpy.Interrupt:  # handle the interruptions from transmitting stations
+
+                # log(self, "Waiting was interrupted")
+                if self.first_interrupt and self.start is not None and self.waiting_backoff is True:
+                    # log(self, "Backoff was interrupted, waiting to resume backoff...")
+                    already_waited = self.env.now - self.start_nr
+
+                    if already_waited <= prioritization_period_time:
+                        self.back_off_time -= prioritization_period_time
+                        # log(self,
+                        #     f"Interrupted in PP time {prioritization_period_time}, backoff {self.back_off_time}")
+                    else:
+                        slots_waited = int(
+                            (already_waited - prioritization_period_time) / self.config_nr.observation_slot_duration)
+                        # self.back_off_time -= already_waited  # set the Back Off to the remaining one
+                        self.back_off_time -= (
+                            (slots_waited * self.config_nr.observation_slot_duration) + prioritization_period_time)
+                        # log(self,
+                        #     f"Completed slots(9us) {slots_waited} = {(slots_waited * self.config_nr.observation_slot_duration)}  plus PP time {prioritization_period_time}")
+                        # log(self, f"Backoff decresed by {(slots_waited * self.config_nr.observation_slot_duration) + prioritization_period_time} new Backoff {self.back_off_time}")
+
+                    #log(self, f"already waited {already_waited} Backoff us, new Backoff {self.back_off_time}")
+                    # addnin new PP before next weiting
+                    self.back_off_time += prioritization_period_time
+                    self.first_interrupt = False
+                    self.waiting_backoff = False
+                
+                # else:
+                #     gap_time = self.time_to_next_sync_slot - self.env.now
+
+                #     assert gap_time >= 0, "Gap period is < 0!!!"
+
+                #     yield self.env.timeout(gap_time)
+            
+
+                    
+
+
+
+
+
 
     def wait_back_off_gap(self):
         
@@ -347,8 +487,8 @@ class Gnb:
                     if gnb.process.is_alive:
                         gnb.process.interrupt()
 
-                # log(self,
-                #     f'Transmission will be for: {self.transmission_to_send.transmission_time} time')
+                log(self,
+                    f'Transmission will be for: {self.transmission_to_send.transmission_time} time')
                 #print('GNB is transmitting now at ', self.env.now)
 
                 yield self.env.timeout(self.transmission_to_send.transmission_time)
@@ -371,6 +511,7 @@ class Gnb:
                     return True
 
             # there was collision
+            self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
             self.channel.tx_list_NR.clear()  # clear transmitting list
             self.channel.tx_list.clear()
             self.channel.tx_queue.release(res)  # leave the transmitting queue
@@ -424,7 +565,7 @@ class Gnb:
         return back_off * self.config_nr.observation_slot_duration
 
     def sent_failed(self):
-        # log(self, "There was a collision")
+        log(self, "There was a collision")
         self.transmission_to_send.number_of_retransmissions += 1
         self.channel.failed_transmissions_NR += 1
         self.failed_transmissions += 1
