@@ -73,7 +73,9 @@ class Gnb:
 
         self.waiting_gap = False
 
-        
+        #Implement resilience model
+        self.is_RS_active = False
+        self.RS_probability = 10
 
         
 
@@ -84,6 +86,7 @@ class Gnb:
     def start(self):
 
         #yield self.env.timeout(self.desync)
+        self.RS_probability = self.channel.nru_rs_probability
         while True:
             # self.transmission_to_send = self.gen_new_transmission()
             was_sent = False
@@ -94,6 +97,8 @@ class Gnb:
                     #print("Backoff Starts ", self.env.now)
                     transmission_prob = random.randint(0, 100)
                     #print(self.channel.nru_transmission_probability)
+
+                    reservation_prob = random.randint(0, 100)
 
                     if self.channel.attack_start <= self.env.now <= self.channel.attack_end:
 
@@ -113,7 +118,10 @@ class Gnb:
                         #attacker_start_time = random.randint(55,490)
                         self.log_nru_minislot_busy_count(attacker_start_time)
                         #self.process = self.env.process(self.wait_back_off_gap())
-                        self.process = self.env.process(self.wait_back_off_gap_after())
+                        if reservation_prob > self.RS_probability:
+                            self.process = self.env.process(self.wait_back_off_gap_after())
+                        else:
+                            self.process = self.env.process(self.wait_back_off())
                         yield self.process
                         # self.process = self.env.process(self.gap_process())
                         # yield self.process
@@ -124,7 +132,10 @@ class Gnb:
                     else:
                         #print("is attacking ",self.env.now)
                         #self.process = self.env.process(self.wait_back_off_gap())
-                        self.process = self.env.process(self.wait_back_off_gap_after())
+                        if reservation_prob > self.RS_probability:
+                            self.process = self.env.process(self.wait_back_off_gap_after())
+                        else:
+                            self.process = self.env.process(self.wait_back_off())
                         yield self.process
                         #print('Backoff finished at ',self.env.now)
                         # self.process = self.env.process(self.gap_process())
@@ -240,7 +251,8 @@ class Gnb:
                         self)  # leave the waiting list as Backoff was waited successfully
                     
                 
-                if self.waiting_gap == True:
+
+                if self.waiting_gap == True and self.is_RS_active == False:
                     self.channel.back_off_list_NR.append(self)
                     self.waiting_gap = True
                     gap_time = self.next_sync_slot_boundry - self.env.now
@@ -252,6 +264,8 @@ class Gnb:
 
                     self.waiting_gap = False
                     self.back_off_time = -1  # leave the loop
+                
+                
 
                     
                 with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
@@ -463,6 +477,7 @@ class Gnb:
             yield self.env.timeout(self.config_nr.synchronization_slot_duration)
 
     def send_transmission(self):
+        #print("Transmission starts in ", self.env.now)
         # add station to currently transmitting list
         self.channel.tx_list_NR.append(self)
         self.transmission_to_send = self.gen_new_transmission()

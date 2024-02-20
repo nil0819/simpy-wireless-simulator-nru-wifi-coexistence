@@ -33,6 +33,10 @@ class Channel:
     # NR-U gnb victim attack probability
     nru_transmission_probability: int = 100
 
+
+    # NR-U Reservation signal probability
+    nru_rs_probability: int = 0
+
     # channel access delay calculation
     nru_channel_access_delays_log: Dict[int, int] = field(default_factory=dict)
 

@@ -71,6 +71,15 @@ python singleRun.py --ap-number 1 --gnb-number 1 -t 1 -r 1 --mcot 10 -syn_slot 5
 python singleRun.py --ap-number 1 --gnb-number 1 -t 1 -r 1 --mcot 10 -syn_slot 500 --rogue True -wifi_cw_min 1 -wifi_cw_max 1
 
 
+
+##With reservation signal:
+python singleRun.py --ap-number 1 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100 -nru_rs_prob 1
+python singleRun.py --ap-number 1 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100 -nru_rs_prob 5
+python singleRun.py --ap-number 1 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100 -nru_rs_prob 10
+python singleRun.py --ap-number 1 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100 -nru_rs_prob 15
+python singleRun.py --ap-number 1 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100 -nru_rs_prob 20
+
+
 SEED = 1 N_stations:=2 N_gNB:=2  CW_MIN = 15 CW_MAX = 63 WiFi pcol:=0.1217 WiFi cot:=0.8879164 WiFi eff:=0.88074 gNB pcol:=0.0000 gNB cot:=0.0354 gNB eff:=0.0354  all cot:=0.9233164 all eff:=0.91614
  Wifi succ: 1631 fail: 226
  NR succ: 59 fail: 0

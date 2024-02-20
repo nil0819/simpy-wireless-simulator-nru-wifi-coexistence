@@ -43,6 +43,7 @@ from simulation import *
 @click.option("--mcot", default=6, help="Max channel occupancy time for NR-U (ms)")
 @click.option("--rogue", "rogue_wifi", default=False, help="Presence of rogue Wi-Fi AP(True/False)")
 @click.option("-n_t_p", "nru_transmission_prob", default=100, help="Transmission probability of NR-U. Helps to show the attack probability. attack probability= (100-trasmission probability)/100")
+@click.option("-nru_rs_prob","nru_reservation_signal_prob", default=0, help="Reservatiom signal probability for NR-U in hybrid RS and gap-based approach. We are trying to keep it less than 50%")
 def single_run(
         runs: int,
         seed: int,
@@ -62,7 +63,8 @@ def single_run(
         nru_observation_slot: int,
         mcot: int,
         rogue_wifi: bool,
-        nru_transmission_prob: int
+        nru_transmission_prob: int,
+        nru_reservation_signal_prob: int
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -81,7 +83,7 @@ def single_run(
                               wifi_r_limit, mcs_value),
                        Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync,
                                  min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot),
-                       backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR, rogue_wifi,nru_transmission_prob)
+                       backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR, rogue_wifi,nru_transmission_prob,nru_reservation_signal_prob)
 
 
 if __name__ == "__main__":
