@@ -116,6 +116,33 @@ python singleRun.py --ap-number 4 --gnb-number 1 -t 16000 -r 1 --mcot 6 -syn_slo
 
 
 
+#error margin calculation
+python singleRun.py --ap-number 1 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100 -r 10
+python singleRun.py --ap-number 1 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 80 -r 10
+python singleRun.py --ap-number 1 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 60 -r 10
+python singleRun.py --ap-number 1 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 40 -r 10
+python singleRun.py --ap-number 1 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 20 -r 10
+
+
+python singleRun.py --ap-number 2 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100 -r 10
+python singleRun.py --ap-number 2 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 80 -r 10
+python singleRun.py --ap-number 2 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 60 -r 10
+python singleRun.py --ap-number 2 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 40 -r 10
+python singleRun.py --ap-number 2 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 20 -r 10
+
+
+python singleRun.py --ap-number 3 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100 -r 10
+python singleRun.py --ap-number 3 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 80 -r 10
+python singleRun.py --ap-number 3 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 60 -r 10
+python singleRun.py --ap-number 3 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 40 -r 10
+python singleRun.py --ap-number 3 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 20 -r 10
+
+
+python singleRun.py --ap-number 4 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 100 -r 10
+python singleRun.py --ap-number 4 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 80 -r 10
+python singleRun.py --ap-number 4 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 60 -r 10
+python singleRun.py --ap-number 4 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 40 -r 10
+python singleRun.py --ap-number 4 --gnb-number 1 -t 8000 -r 1 --mcot 6 -syn_slot 500 -n_t_p 20 -r 10
 
 
 SEED = 1 N_stations:=2 N_gNB:=2  CW_MIN = 15 CW_MAX = 63 WiFi pcol:=0.1217 WiFi cot:=0.8879164 WiFi eff:=0.88074 gNB pcol:=0.0000 gNB cot:=0.0354 gNB eff:=0.0354  all cot:=0.9233164 all eff:=0.91614

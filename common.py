@@ -6,6 +6,7 @@ import time
 import pandas as pd
 import simpy
 
+
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -13,7 +14,7 @@ from typing import Dict, List
 from datetime import datetime
 
 
-output_csv = "lool.csv"
+output_csv = "lool\\lool."+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+".csv"
 file_log_name = f"{'log/'+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')}.log"
 
 

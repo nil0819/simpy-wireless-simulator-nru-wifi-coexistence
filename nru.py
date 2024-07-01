@@ -7,7 +7,7 @@ class Config_NR:
     deter_period: int = 16  # time used for waiting in prioritization period, microsec
     observation_slot_duration: int = 9  # observation slot in mikros
     # synchronization slot lenght in mikros
-    synchronization_slot_duration: int = 500
+    synchronization_slot_duration: int = 500#250
     max_sync_slot_desync: int = 500
     min_sync_slot_desync: int = 0
     # channel access class related:
@@ -31,7 +31,7 @@ class Transmission_NR:
     collided: bool = False  # true if transmission colided with another one
 
 
-class Gnb:
+class Gnb():
     def __init__(
             self,
             env: simpy.Environment,
@@ -50,11 +50,13 @@ class Gnb:
         self.failed_transmissions = 0  # all failed transmissions for station
         # all failed transmissions for station in a row
         self.failed_transmissions_in_row = 0
-        self.cw_min = config_nr.cw_min  # cw min parameter value
+        #Fixing cwmin value as 32
+        self.cw_min = 32#config_nr.cw_min  # cw min parameter value
         self.N = None  # backoff counter
         self.desync = 0
         self.next_sync_slot_boundry = 0
-        self.cw_max = config_nr.cw_max  # cw max parameter value
+        #Fixing cwmax value as 32
+        self.cw_max = 32#config_nr.cw_max  # cw max parameter value
         self.channel = channel  # channel objfirst_transmission
         env.process(self.start())  # starting simulation process
         env.process(self.sync_slot_counter())
@@ -65,13 +67,17 @@ class Gnb:
         self.first_interrupt = False
         self.back_off_time = 0
         self.time_to_next_sync_slot = 0
-        self.waiting_backoff = False
+        self.waiting_backoff = False#True
         self.start_nr = 0
         #channel access delay calculation
         self.channel_access_delay = 0
         self.channel_access_attempt_start = 0
 
         self.waiting_gap = False
+
+        #May15,2024
+        self.log_backoff_value = 0
+        self.log_gap_value = 0
 
         
 
@@ -80,10 +86,9 @@ class Gnb:
         
 
     def start(self):
-
         #yield self.env.timeout(self.desync)
         while True:
-            # self.transmission_to_send = self.gen_new_transmission()
+            self.transmission_to_send = self.gen_new_transmission()
             was_sent = False
             self.channel_access_attempt_start = self.env.now
             while not was_sent:
@@ -97,7 +102,7 @@ class Gnb:
 
                         self.channel.channel_access_det_attack_active_slots.append(self.env.now)
 
-                    if transmission_prob >= self.channel.nru_transmission_probability: #and self.channel.attack_start <= self.env.now <= self.channel.attack_end:
+                    if transmission_prob > self.channel.nru_transmission_probability: #and self.channel.attack_start <= self.env.now <= self.channel.attack_end:
                         
                         #print("is attacking", self.env.now)
                         # print("transmission prob value ",transmission_prob, " and transmitting")
@@ -118,6 +123,7 @@ class Gnb:
                         #non_transmission_start_time = self.env.now
                         was_sent = yield self.env.process(self.do_not_transmit())
                         #non_transmission_end_time = self.env.now
+                        self.channel.is_attacker_active = False
 
                     else:
                         #print("is attacking ",self.env.now)
@@ -158,7 +164,11 @@ class Gnb:
                     self.process = self.env.process(self.wait_back_off())
                     yield self.process
                     was_sent = yield self.env.process(self.send_transmission())
+                # Generate a new frame for immediate transmission
+                self.transmission_to_send = self.gen_new_transmission()
 
+
+        
 
     def gap_process(self):
         
@@ -177,13 +187,19 @@ class Gnb:
     def do_not_transmit(self):
         
         time_remaining = self.next_sync_slot_boundry-self.env.now
-        #print("Time remaining ", time_remaining)
+        #print("Time remaining ", self.env.now, time_remaining)
         yield self.env.timeout(time_remaining)
+        #yield self.env.timeout(0)
         #print("Now ", self.env.now)
         self.log_slot_nru_not_busy()
+
+        self.channel.total_attack_count = self.channel.total_attack_count+1
+
         return False
     
     def wait_back_off_gap_after(self):
+
+        #print(self.channel.is_attacker_active, " ", self.env.now)
 
         self.back_off_time = self.generate_new_back_off_time(
             self.failed_transmissions_in_row)
@@ -195,6 +211,8 @@ class Gnb:
         self.back_off_time += prioritization_period_time
 
         self.waiting_backoff = True
+
+        self.log_backoff_value = self.back_off_time
 
         while self.back_off_time > -1:
             try:
@@ -217,39 +235,52 @@ class Gnb:
                 self.waiting_gap = True
                 
                 #  checking if channel if idle
-                if (len(self.channel.tx_list_NR) + len(self.channel.tx_list)) > 0:
-                    # log(self, 'Channel busy -- waiting to be free')
-                    with self.channel.tx_lock.request() as req:
-                        yield req
-                    # log(self, 'Finished waiting for free channel - restarting backoff procedure')
+                # if (len(self.channel.tx_list_NR) + len(self.channel.tx_list)) > 0:
+                #     # log(self, 'Channel busy -- waiting to be free')
+                #     with self.channel.tx_lock.request() as req:
+                #         yield req
+                #     # log(self, 'Finished waiting for free channel - restarting backoff procedure')
                 
-                elif self.waiting_backoff == True:
+                if self.waiting_backoff == True:
                     self.channel.back_off_list_NR.append(self)
                     self.waiting_backoff = True
 
                      # join the environment action queue
                     yield self.env.timeout(self.back_off_time)
 
-                    # log(self, f"Backoff waited, sending frame...")
+                    #log(self, f"Backoff waited, sending frame...")
                     
                     self.waiting_backoff = False
 
-                    self.channel.back_off_list_NR.remove(
-                        self)  # leave the waiting list as Backoff was waited successfully
+                    
                     
                 
                 if self.waiting_gap == True:
                     self.channel.back_off_list_NR.append(self)
                     self.waiting_gap = True
-                    gap_time = self.next_sync_slot_boundry - self.env.now
+                    
                     #print(self.next_sync_slot_boundry)
-                    # log(self, f"Waiting gap period of : {gap_time} us")
+                    #print(self.env.now)
+                    #log(self, f"Waiting gap period of : {gap_time} us")
+
+                    if self.channel.is_attacker_active == False:
+                        gap_time = self.next_sync_slot_boundry - self.env.now
+                    
+                    else:
+                        attack_duration = min(9, self.next_sync_slot_boundry - self.env.now)
+                        gap_time = self.next_sync_slot_boundry - self.env.now - attack_duration
+                        #print(gap_time)
+
                     assert gap_time >= 0, "Gap period is < 0!!!"
 
+                    self.log_gap_value = gap_time
                     yield self.env.timeout(gap_time)
 
                     self.waiting_gap = False
                     self.back_off_time = -1  # leave the loop
+                
+                self.channel.back_off_list_NR.remove(
+                        self)  # leave the waiting list as Backoff was waited successfully
 
                     
                 with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
@@ -258,9 +289,9 @@ class Gnb:
        
             except simpy.Interrupt:  # handle the interruptions from transmitting stations
 
-                # log(self, "Waiting was interrupted")
+                #log(self, "Waiting was interrupted")
                 if self.first_interrupt and self.start is not None and self.waiting_backoff is True:
-                    # log(self, "Backoff was interrupted, waiting to resume backoff...")
+                    #log(self, "Backoff was interrupted, waiting to resume backoff...")
                     already_waited = self.env.now - self.start_nr
 
                     if already_waited <= prioritization_period_time:
@@ -396,6 +427,7 @@ class Gnb:
         m = self.config_nr.M
         prioritization_period_time = self.config_nr.deter_period + \
             m * self.config_nr.observation_slot_duration
+        #self.back_off_time += prioritization_period_time
 
         while self.back_off_time > -1:
 
@@ -487,9 +519,12 @@ class Gnb:
                     if gnb.process.is_alive:
                         gnb.process.interrupt()
 
-                log(self,
-                    f'Transmission will be for: {self.transmission_to_send.transmission_time} time')
+                # log(self,
+                #     f'Transmission will be for: {self.transmission_to_send.transmission_time} time')
                 #print('GNB is transmitting now at ', self.env.now)
+
+                # Adding values to sim calculation
+                self.insert_channel_occupancy_nru(self.env.now,self.transmission_to_send.transmission_time )
 
                 yield self.env.timeout(self.transmission_to_send.transmission_time)
 
@@ -508,10 +543,12 @@ class Gnb:
                     self.channel.tx_list.clear()
                     # leave the transmitting queue
                     self.channel.tx_queue.release(res)
+
                     return True
 
             # there was collision
-            #self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
+            #print(self.transmission_to_send.airtime)
+            self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
             self.channel.tx_list_NR.clear()  # clear transmitting list
             self.channel.tx_list.clear()
             self.channel.tx_queue.release(res)  # leave the transmitting queue
@@ -522,8 +559,11 @@ class Gnb:
 
         except simpy.Interrupt:  # this station does not have the longest frame, waiting frame time
             yield self.env.timeout(self.transmission_to_send.transmission_time)
+            self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
+
 
         was_sent = self.check_collision()
+        self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
         return was_sent
 
     def check_collision(self):  # check if the collision occurred
@@ -559,23 +599,31 @@ class Gnb:
             self.cw_min + 1) - 1)  # define the upper limit basing on  unsuccessful transmissions in the row
         upper_limit = (
             upper_limit if upper_limit <= self.cw_max else self.cw_max)  # set upper limit to CW Max if is bigger then this parameter
+        
         back_off = random.randint(0, upper_limit)  # draw the back off value
         # store drawn value for future analyzes
+        # print('min', self.cw_min, 'max', self.cw_max)
+        # print(upper_limit-1)
         self.channel.backoffs[back_off][self.channel.n_of_stations] += 1
         return back_off * self.config_nr.observation_slot_duration
 
     def sent_failed(self):
-        log(self, "There was a collision")
+        #log(self, "There was a collision")
         self.transmission_to_send.number_of_retransmissions += 1
         self.channel.failed_transmissions_NR += 1
         self.failed_transmissions += 1
         self.failed_transmissions_in_row += 1
+
+        #log channel variable
+        self.channel.log_nru_backoff_time[self.env.now] = self.log_backoff_value
+        self.channel.log_nru_gap_time[self.env.now] = self.log_gap_value
+
         # log(self, self.channel.failed_transmissions_NR)
         if self.transmission_to_send.number_of_retransmissions > 7:
             self.failed_transmissions_in_row = 0
 
     def sent_completed(self):
-        # log(self, f"Successfully sent transmission")
+        #log(self, f"Successfully sent transmission")
         self.transmission_to_send.t_end = self.env.now
         self.transmission_to_send.t_to_send = (
             self.transmission_to_send.t_end - self.transmission_to_send.t_start)
@@ -621,3 +669,25 @@ class Gnb:
         
         #busy_slot_time = (i-self.channel.minislot_log_start_time) 
         self.channel.slot_nru_active[self.next_sync_slot_boundry] = 0
+
+    
+    def insert_channel_occupancy_nru(self, time, channel_occupancy):
+
+        try:
+            if time in self.channel.new_channel_occupancy_nru:
+                if self.channel.new_channel_occupancy_nru[time] > channel_occupancy:
+                    self.channel.new_channel_occupancy_nru[time] > self.channel.new_channel_occupancy_nru[time]
+            
+            if time in self.channel.new_channel_occupancy_wifi:
+                if self.channel.new_channel_occupancy_wifi[time]>channel_occupancy:
+                    self.channel.new_channel_occupancy_nru[time]> self.channel.new_channel_occupancy_wifi[time]
+            
+            else:
+                self.channel.new_channel_occupancy_nru[time] = channel_occupancy
+        
+        except KeyError:
+            self.channel.new_channel_occupancy_nru[time] = channel_occupancy
+
+
+            
+

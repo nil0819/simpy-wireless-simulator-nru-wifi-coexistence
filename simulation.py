@@ -5,6 +5,7 @@ from channel import *
 from roguewificad import *
 from roguewifiselfbackoff import *
 from roguewifijammer import *
+from sim_calculation import *
 
 
 def run_simulation(
@@ -61,12 +62,13 @@ def run_simulation(
     for i in range(1, number_of_stations + 1):
         if is_rogue_wifi:
             print("Rogue WiFi")
-            RogueWiFiCAD(environment, "Station {}".format(i), channel, config)
-            # RogueWiFiSelfBackoff(environment, "Station {}".format(i), channel, config)
+            #RogueWiFiCAD(environment, "Station {}".format(i), channel, config)
+            RogueWiFiSelfBackoff(environment, "Station {}".format(i), channel, config)
             # RogueWiFiJammer(environment, "Station {}".format(i), channel, config)
         else:
             print("Benign WiFi")
             WiFi(environment, "Station {}".format(i), channel, config)
+
 
     for i in range(1, number_of_gnb + 1):
         # Gnb(environment, "Gnb {}".format(i), channel, config_nr)
@@ -74,10 +76,11 @@ def run_simulation(
 
     # environment.run(until=simulation_time * 1000000) 10^6 milisekundy
     environment.run(until=simulation_time * 1000000)
+    
 
     if number_of_stations != 0:
         if (channel.failed_transmissions + channel.succeeded_transmissions) != 0:
-            p_coll = "{:.4f}".format(
+            p_coll = "{:.10f}".format(
                 channel.failed_transmissions / (channel.failed_transmissions + channel.succeeded_transmissions))
         else:
             p_coll = 0
@@ -86,7 +89,7 @@ def run_simulation(
 
     if number_of_gnb != 0:
         if (channel.failed_transmissions_NR + channel.succeeded_transmissions_NR) != 0:
-            p_coll_NR = "{:.4f}".format(
+            p_coll_NR = "{:.10f}".format(
                 channel.failed_transmissions_NR / (
                         channel.failed_transmissions_NR + channel.succeeded_transmissions_NR))
         else:
@@ -129,7 +132,7 @@ def run_simulation(
 
     for i in range(1, number_of_stations + 1):
         channel_occupancy_time += channel.airtime_data["Station {}".format(i)] + channel.airtime_control[
-            "Station {}".format(i)]
+            "Station {}".format(i)] #+ (channel.failed_transmissions_NR * 600)
         channel_efficiency += channel.airtime_data["Station {}".format(i)]
 
     for i in range(1, number_of_gnb + 1):
@@ -181,14 +184,15 @@ def run_simulation(
             result_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
 
         if write_header:
+
             result_adder.writerow(
-                ['Seed,WiFi,Gnb,ChannelOccupancyWiFi,ChannelEfficiencyWiFi,PcolWifi,ChannelOccupancyNR,ChannelEfficiencyNR,PcolNR,ChannelOccupancyAll,ChannelEfficiencyAll'])
+                ["Seed","WiFi","Gnb","ChannelOccupancyWiFi","ChannelEfficiencyWiFi","PcolWifi","ChannelOccupancyNR","ChannelEfficiencyNR","PcolNR","ChannelOccupancyAll","ChannelEfficiencyAll", "WifiSuccess", "WifiFail", "NRSuccess", "NRFail"])
 
         result_adder.writerow(
-            [seed, config.cw_max, fairness, number_of_stations, number_of_gnb, normalized_channel_occupancy_time, normalized_channel_efficiency,
+            [seed, fairness, number_of_stations, number_of_gnb, normalized_channel_occupancy_time, normalized_channel_efficiency,
              p_coll,
              normalized_channel_occupancy_time_NR, normalized_channel_efficiency_NR, p_coll_NR,
-             normalized_channel_occupancy_time_all, normalized_channel_efficiency_all])
+             normalized_channel_occupancy_time_all, normalized_channel_efficiency_all,channel.succeeded_transmissions, channel.failed_transmissions, channel.succeeded_transmissions_NR, channel.failed_transmissions_NR])
 
     # for key,value in channel.nru_channel_access_delays_log.items():
     #     print(key," ",value)
@@ -209,7 +213,10 @@ def run_simulation(
             
     
     access_delays = channel.nru_channel_access_delays_log.values()
-    average_delay = sum(access_delays) / len(access_delays)
+    if number_of_gnb != 0:
+        average_delay = sum(access_delays) / len(access_delays)
+    else:
+        average_delay = 0
 
     print("The average channel access delay of NR-U is", average_delay)
     # for key, value in channel.nru_minislot_busy_log.items():
@@ -241,20 +248,96 @@ def run_simulation(
 
         for i in channel.channel_access_det_attack_active_slots:
             writer.writerow({"attacker_active_slots": i})
-
-    nru_busy_log = "nru_busy_log\\" + "nru_busy_log"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+"_AP_" + \
-        str(number_of_stations)+"_GNB_"+str(number_of_gnb)+"_trprob_" + \
-        str(nru_transmission_prob)+"_seed_"+str(seed)+".csv"
-    # for key,value in channel.slot_nru_active.items():
-    #     print(key,":",value)
-    with open(nru_busy_log, "w", newline="") as csvfile:
-        fieldnames = ["time", "busy"]
-
+    
+    nru_backoff_log = "nr_backoff_gap_log\\"+"nru_backoff_log_"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+".csv"
+    with open(nru_backoff_log, "w", newline="") as csvfile:
+        fieldnames= ["time", "backoff_time"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
         writer.writeheader()
 
-        for key, value in channel.slot_nru_active.items():
-            writer.writerow({"time": key, "busy": value})
+        for key, value in channel.log_nru_backoff_time.items():
+            writer.writerow({"time":key , "backoff_time":value})
+    
+    nrugap_log = "nr_backoff_gap_log\\"+"nru_gap_log_"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+".csv"
+    with open(nrugap_log, "w", newline="") as csvfile:
+        fieldnames= ["time", "gap_time"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        writer.writeheader()
+
+        for key, value in channel.log_nru_gap_time.items():
+            writer.writerow({"time":key , "gap_time":value})
+
+    # nru_busy_log = "nru_busy_log\\" + "nru_busy_log"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+"_AP_" + \
+    #     str(number_of_stations)+"_GNB_"+str(number_of_gnb)+"_trprob_" + \
+    #     str(nru_transmission_prob)+"_seed_"+str(seed)+".csv"
+    # # for key,value in channel.slot_nru_active.items():
+    # #     print(key,":",value)
+    # with open(nru_busy_log, "w", newline="") as csvfile:
+    #     fieldnames = ["time", "busy"]
+
+    #     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    #     writer.writeheader()
+
+    #     for key, value in channel.slot_nru_active.items():
+    #         writer.writerow({"time": key, "busy": value})
+
+
+
+    
+    # wifi_backoff_log = "wifi_backoff_log\\"+ "wifi_backoff"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+"_AP_" + \
+    #     str(number_of_stations)+"_GNB_"+str(number_of_gnb)+"_trprob_" + \
+    #     str(nru_transmission_prob)+"_seed_"+str(seed)+".csv"
+    
+    # with open(wifi_backoff_log, "w", newline="") as csvfile:
+    #     fieldnames = ["name","backoff"]
+    #     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    #     writer.writeheader()
+
+    #     for key, value in channel.wifi_backoff_value.items():
+    #         writer.writerow({"name":key, "backoff":value})
+
+    
+    # for key in channel.transmission_attempt.items():
+    #     print(key," ",value)
+    
+    # for key in channel.transmission_failure.items():
+    #     print(key," ",value)
+
+
+    # Printing new Calculation of Channel Occupancy
+    
+    #SimCalculation.get_normalized_occupancy(time)
+
+    total_channel_occupancy_nru=0
+    total_channel_occupancy_wifi=0
+
+    for key,value in channel.new_channel_occupancy_nru.items():
+        total_channel_occupancy_nru += value
+        
+        
+    for key,value in channel.new_channel_occupancy_wifi.items():
+        total_channel_occupancy_wifi+= value
+    
+    
+        
+    
+    normalized_channel_occupancy_nru = (total_channel_occupancy_nru/time)*100
+    normalized_channel_occupancy_wifi = (total_channel_occupancy_wifi/time)*100
+
+
+    channel.new_normalized_channel_occupancy_nru = (total_channel_occupancy_nru/time)*100
+    channel.new_normalized_channel_occupancy_wifi = (total_channel_occupancy_wifi/time)*100
+
+    print(total_channel_occupancy_nru, total_channel_occupancy_wifi)
+    print(channel.new_normalized_channel_occupancy_nru, channel.new_normalized_channel_occupancy_wifi, time)
+
+    print("New Calculation of channel occupancy of Wifi ", normalized_channel_occupancy_wifi)
+    print("New Calculation of channel occupancy of NR-U ", normalized_channel_occupancy_nru)
+
+
+    print("Total Attack ", channel.total_attack_count)
 
     
     

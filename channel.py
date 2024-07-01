@@ -56,6 +56,30 @@ class Channel:
 
 
     is_attacker_active = False
+
+
+    #monitor Wifi backoff
+    #wifi_backoff_value: Dict[str, int] = field(default_factory=dict)
+
+    #monitor transmission attempt
+    transmission_attempt: Dict[str, int] = field(default_factory=dict) 
+    transmission_failure: Dict[str, int] = field(default_factory=dict)
+
+    # New Normalized channel occupancy
+    new_normalized_channel_occupancy_nru:float = 0.0
+    new_normalized_channel_occupancy_wifi:float = 0.0
+
+    new_channel_occupancy_wifi: Dict[int, int] = field(default_factory=dict)
+    new_channel_occupancy_nru: Dict[int, int] = field(default_factory=dict)
+
+    total_attack_count: int = 0
+
+
+    log_nru_backoff_time: Dict[int, int] = field(default_factory=dict)
+    log_nru_gap_time: Dict[int, int] = field(default_factory=dict)
+    log_wifi_backoff: Dict[int, int] = field(default_factory=dict)
+    
+
     
 
     
