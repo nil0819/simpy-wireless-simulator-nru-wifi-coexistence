@@ -97,7 +97,7 @@ class Gnb:
 
                         self.channel.channel_access_det_attack_active_slots.append(self.env.now)
 
-                    if transmission_prob >= self.channel.nru_transmission_probability: #and self.channel.attack_start <= self.env.now <= self.channel.attack_end:
+                    if transmission_prob >= self.channel.nru_transmission_probability and self.channel.attack_start <= self.env.now <= self.channel.attack_end:
                         
                         #print("is attacking", self.env.now)
                         # print("transmission prob value ",transmission_prob, " and transmitting")
@@ -118,6 +118,7 @@ class Gnb:
                         #non_transmission_start_time = self.env.now
                         was_sent = yield self.env.process(self.do_not_transmit())
                         #non_transmission_end_time = self.env.now
+                        self.channel.is_attacker_active = False
 
                     else:
                         #print("is attacking ",self.env.now)
@@ -177,10 +178,14 @@ class Gnb:
     def do_not_transmit(self):
         
         time_remaining = self.next_sync_slot_boundry-self.env.now
-        #print("Time remaining ", time_remaining)
+        #print("Time remaining ", self.env.now, time_remaining)
         yield self.env.timeout(time_remaining)
+        #yield self.env.timeout(0)
         #print("Now ", self.env.now)
         self.log_slot_nru_not_busy()
+
+        self.channel.total_attack_count = self.channel.total_attack_count+1
+
         return False
     
     def wait_back_off_gap_after(self):
@@ -487,9 +492,12 @@ class Gnb:
                     if gnb.process.is_alive:
                         gnb.process.interrupt()
 
-                log(self,
-                    f'Transmission will be for: {self.transmission_to_send.transmission_time} time')
+                # log(self,
+                #     f'Transmission will be for: {self.transmission_to_send.transmission_time} time')
                 #print('GNB is transmitting now at ', self.env.now)
+
+                # Adding values to sim calculation
+                self.insert_channel_occupancy_nru(self.env.now,self.transmission_to_send.transmission_time )
 
                 yield self.env.timeout(self.transmission_to_send.transmission_time)
 
@@ -508,9 +516,11 @@ class Gnb:
                     self.channel.tx_list.clear()
                     # leave the transmitting queue
                     self.channel.tx_queue.release(res)
+
                     return True
 
             # there was collision
+            #print(self.transmission_to_send.airtime)
             self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
             self.channel.tx_list_NR.clear()  # clear transmitting list
             self.channel.tx_list.clear()
@@ -522,8 +532,11 @@ class Gnb:
 
         except simpy.Interrupt:  # this station does not have the longest frame, waiting frame time
             yield self.env.timeout(self.transmission_to_send.transmission_time)
+            self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
+
 
         was_sent = self.check_collision()
+        self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
         return was_sent
 
     def check_collision(self):  # check if the collision occurred
