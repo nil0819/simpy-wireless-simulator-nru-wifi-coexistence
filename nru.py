@@ -79,6 +79,8 @@ class Gnb():
         self.reservation_time = 0
 
         self.channel.is_resilience_active = True
+
+        self.is_resilience_worked = True
         
         
 
@@ -122,7 +124,10 @@ class Gnb():
                         # self.process = self.env.process(self.gap_process())
                         # yield self.process
                         #non_transmission_start_time = self.env.now
-                        was_sent = yield self.env.process(self.do_not_transmit())
+                        if self.is_resilience_worked == True:
+                            was_sent = yield self.env.process(self.send_transmission())
+                        else:
+                            was_sent = yield self.env.process(self.do_not_transmit())
                         #non_transmission_end_time = self.env.now
                         self.channel.is_attacker_active = False
 
@@ -206,6 +211,7 @@ class Gnb():
     def wait_back_off_gap_after(self):
 
         #print(self.channel.is_attacker_active, " ", self.env.now)
+        
 
         self.back_off_time = self.generate_new_back_off_time(
             self.failed_transmissions_in_row)
@@ -262,6 +268,7 @@ class Gnb():
                     
                 
                 if self.waiting_gap == True:
+                    
                     self.channel.back_off_list_NR.append(self)
                     self.waiting_gap = True
                     
@@ -271,11 +278,27 @@ class Gnb():
 
                     if self.channel.is_attacker_active == False:
                         gap_time = self.next_sync_slot_boundry - self.env.now
+                        attack_duration = 0
                     
                     else:
                         attack_duration = min(9, self.next_sync_slot_boundry - self.env.now)
+                        # gap_time = self.next_sync_slot_boundry - self.env.now - attack_duration
+
+                    #Adding new logic in Hybrid RS-gap
+                    total_gap_time = self.next_sync_slot_boundry - self.env.now
+                    is_attack_successful_guessing = random.randint(1,total_gap_time)
+
+                    if is_attack_successful_guessing<=1:
                         gap_time = self.next_sync_slot_boundry - self.env.now - attack_duration
-                        #print(gap_time)
+                        self.is_resilience_worked = False
+                    else:
+                        gap_time = self.next_sync_slot_boundry - self.env.now
+
+                        self.reservation_time = random.randint(0,gap_time)
+                        gap_time = gap_time-self.reservation_time 
+                        self.is_resilience_worked = True
+                    # print(gap_time)
+                    # print(self.reservation_time)
 
                     assert gap_time >= 0, "Gap period is < 0!!!"
 
@@ -508,6 +531,8 @@ class Gnb():
 
     def send_transmission(self):
         # add station to currently transmitting list
+
+        #print("current time ", self.env.now)
         self.channel.tx_list_NR.append(self)
         self.transmission_to_send = self.gen_new_transmission()
         res = self.channel.tx_queue.request(priority=(
