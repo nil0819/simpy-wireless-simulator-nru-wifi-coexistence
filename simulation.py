@@ -248,6 +248,26 @@ def run_simulation(
 
         for i in channel.channel_access_det_attack_active_slots:
             writer.writerow({"attacker_active_slots": i})
+    
+    nru_backoff_log = "nr_backoff_gap_log\\"+"nru_backoff_log_"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+".csv"
+    with open(nru_backoff_log, "w", newline="") as csvfile:
+        fieldnames= ["time", "backoff_time"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        writer.writeheader()
+
+        for key, value in channel.log_nru_backoff_time.items():
+            writer.writerow({"time":key , "backoff_time":value})
+    
+    nrugap_log = "nr_backoff_gap_log\\"+"nru_gap_log_"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+".csv"
+    with open(nrugap_log, "w", newline="") as csvfile:
+        fieldnames= ["time", "gap_time"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        writer.writeheader()
+
+        for key, value in channel.log_nru_gap_time.items():
+            writer.writerow({"time":key , "gap_time":value})
 
     # nru_busy_log = "nru_busy_log\\" + "nru_busy_log"+datetime.today().strftime('%Y-%m-%d-%H-%M-%S')+"_AP_" + \
     #     str(number_of_stations)+"_GNB_"+str(number_of_gnb)+"_trprob_" + \
@@ -299,6 +319,8 @@ def run_simulation(
         
     for key,value in channel.new_channel_occupancy_wifi.items():
         total_channel_occupancy_wifi+= value
+    
+    
         
     
     normalized_channel_occupancy_nru = (total_channel_occupancy_nru/time)*100
@@ -319,4 +341,3 @@ def run_simulation(
 
     
     
-

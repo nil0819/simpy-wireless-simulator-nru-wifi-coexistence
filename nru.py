@@ -75,6 +75,11 @@ class Gnb():
 
         self.waiting_gap = False
 
+        #Reservation Signal
+        self.reservation_time = 0
+
+        self.channel.is_resilience_active = True
+        
         
 
         #NR-U minislot specific busy count log
@@ -174,8 +179,13 @@ class Gnb():
             with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
                 yield req
             gap_time = self.next_sync_slot_boundry - self.env.now+1
-            print(gap_time)
-            yield self.env.timeout(gap_time)
+
+            #Introducing Random RS signal    
+            self.reservation_time = random.randint(0, gap_time)
+
+            print("RS ",self.reservation_time)
+            print("Gap ",gap_time)
+            yield self.env.timeout(gap_time-self.reservation_time)
         except simpy.Interrupt:
             return
         
@@ -208,6 +218,8 @@ class Gnb():
 
         self.waiting_backoff = True
 
+        self.log_backoff_value = self.back_off_time
+
         while self.back_off_time > -1:
             try:
                 with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
@@ -229,20 +241,20 @@ class Gnb():
                 self.waiting_gap = True
                 
                 #  checking if channel if idle
-                if (len(self.channel.tx_list_NR) + len(self.channel.tx_list)) > 0:
-                    # log(self, 'Channel busy -- waiting to be free')
-                    with self.channel.tx_lock.request() as req:
-                        yield req
-                    # log(self, 'Finished waiting for free channel - restarting backoff procedure')
+                # if (len(self.channel.tx_list_NR) + len(self.channel.tx_list)) > 0:
+                #     # log(self, 'Channel busy -- waiting to be free')
+                #     with self.channel.tx_lock.request() as req:
+                #         yield req
+                #     # log(self, 'Finished waiting for free channel - restarting backoff procedure')
                 
-                elif self.waiting_backoff == True:
+                if self.waiting_backoff == True:
                     self.channel.back_off_list_NR.append(self)
                     self.waiting_backoff = True
 
                      # join the environment action queue
                     yield self.env.timeout(self.back_off_time)
 
-                    # log(self, f"Backoff waited, sending frame...")
+                    #log(self, f"Backoff waited, sending frame...")
                     
                     self.waiting_backoff = False
 
@@ -267,6 +279,7 @@ class Gnb():
 
                     assert gap_time >= 0, "Gap period is < 0!!!"
 
+                    self.log_gap_value = gap_time
                     yield self.env.timeout(gap_time)
 
                     self.waiting_gap = False
@@ -282,9 +295,9 @@ class Gnb():
        
             except simpy.Interrupt:  # handle the interruptions from transmitting stations
 
-                # log(self, "Waiting was interrupted")
+                #log(self, "Waiting was interrupted")
                 if self.first_interrupt and self.start is not None and self.waiting_backoff is True:
-                    # log(self, "Backoff was interrupted, waiting to resume backoff...")
+                    #log(self, "Backoff was interrupted, waiting to resume backoff...")
                     already_waited = self.env.now - self.start_nr
 
                     if already_waited <= prioritization_period_time:
@@ -316,6 +329,9 @@ class Gnb():
             
 
                     
+
+
+
 
 
 
@@ -412,6 +428,9 @@ class Gnb():
                     self.first_interrupt = False
                     self.waiting_backoff = False
 
+
+
+
     def wait_back_off(self):
         # Wait random number of slots N x OBSERVATION_SLOT_DURATION us
         global start
@@ -467,6 +486,8 @@ class Gnb():
 
                     self.first_interrupt = False
                     self.waiting_backoff = False
+
+
 
     def sync_slot_counter(self):
         # Process responsible for keeping the next sync slot boundry timestamp
@@ -559,6 +580,7 @@ class Gnb():
         self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
         return was_sent
 
+
     def check_collision(self):  # check if the collision occurred
 
         if gap:
@@ -605,6 +627,11 @@ class Gnb():
         self.channel.failed_transmissions_NR += 1
         self.failed_transmissions += 1
         self.failed_transmissions_in_row += 1
+
+        #log channel variable
+        self.channel.log_nru_backoff_time[self.env.now] = self.log_backoff_value
+        self.channel.log_nru_gap_time[self.env.now] = self.log_gap_value
+
         # log(self, self.channel.failed_transmissions_NR)
         if self.transmission_to_send.number_of_retransmissions > 7:
             self.failed_transmissions_in_row = 0
@@ -656,6 +683,9 @@ class Gnb():
         
         #busy_slot_time = (i-self.channel.minislot_log_start_time) 
         self.channel.slot_nru_active[self.next_sync_slot_boundry] = 0
+
+    def log_reservation_duration(self):
+        self.channel.nru_reservation_times.append(self.reservation_time)
 
     
     def insert_channel_occupancy_nru(self, time, channel_occupancy):

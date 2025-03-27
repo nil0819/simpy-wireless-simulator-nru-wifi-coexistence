@@ -73,6 +73,23 @@ class Channel:
     new_channel_occupancy_nru: Dict[int, int] = field(default_factory=dict)
 
     total_attack_count: int = 0
+
+
+    nru_reservation_times = []
+
+    is_resilience_active = False
+
+
+
+    
+
+    log_nru_backoff_time: Dict[int, int] = field(default_factory=dict)
+    log_nru_gap_time: Dict[int, int] = field(default_factory=dict)
+    log_wifi_backoff: Dict[int, int] = field(default_factory=dict)
+    
+
+    
+
     
 
     

@@ -9,25 +9,18 @@ class Config:
     data_size: int = 1472  # size od payload in b
     cw_min: int = 32  # min cw window size
     cw_max: int = 32  # max cw window size 1023 def
-    r_limit: int = 0
-    mcs: int = 0
-
-    # data_size: int = 1472  # size od payload in b
-    # cw_min: int = 32  # min cw window size
-    # cw_max: int = 1024  # max cw window size 1023 def
-    # r_limit: int = 7
-    # mcs: int = 7
+    r_limit: int = 7
+    mcs: int = 7
 
 
 
-class WiFi():
+class WiFi:
     def __init__(
             self,
             env: simpy.Environment,
             name: str,
             channel: dataclass,
             config: Config = Config(),
-            
     ):
         self.config = config
         self.times = Times(config.data_size, config.mcs)  # using Times script to get time calculations
@@ -48,14 +41,8 @@ class WiFi():
         self.first_interrupt = False
         self.back_off_time = 0
         self.start = 0
-        self.channel.transmission_attempt[self.name] = 0
-        self.channel.transmission_failure[self.name] = 0
-
-
-        
 
     def start(self):
-        
         while True:
             self.frame_to_send = self.generate_new_frame()
             was_sent = False
@@ -67,48 +54,42 @@ class WiFi():
                 was_sent = yield self.env.process(self.send_frame())
                 transmission_end_time = self.env.now
                 self.log_slot_nru_not_busy(transmission_start_time,transmission_end_time)
-                #difference = transmission_end_time-transmission_start_time
-                #print("Transmission time period ", difference)
                 #print("Wifi transmission end", self.env.now)
                 # self.process = None
-                # Generate a new frame for immediate transmission
-                self.frame_to_send = self.generate_new_frame()
 
     
+
+
     def wait_back_off(self):
         #global start
         self.back_off_time = self.generate_new_back_off_time(
             self.failed_transmissions_in_row)  # generating the new Back Off time
-        
-        #print("Backoff value ", self.back_off_time)
 
         while self.back_off_time > -1:
             try:
                 with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
                     yield req
                 self.back_off_time += Times.t_difs  # add DIFS time
-                #log(self, f"Starting to wait backoff (with DIFS): ({self.back_off_time})u...")
+                # log(self, f"Starting to wait backoff (with DIFS): ({self.back_off_time})u...")
                 self.first_interrupt = True
                 self.start = self.env.now  # store the current simulation time
                 self.channel.back_off_list.append(self)  # join the list off stations which are waiting Back Offs
 
                 yield self.env.timeout(self.back_off_time)  # join the environment action queue
 
-                #log(self, f"Backoff waited, sending frame...")
+                # log(self, f"Backoff waited, sending frame...")
                 self.back_off_time = -1  # leave the loop
 
                 self.channel.back_off_list.remove(self)  # leave the waiting list as Backoff was waited successfully
 
             except simpy.Interrupt:  # handle the interruptions from transmitting stations
-
-                #print("Backoff waited", self.env.now - self.start)
                 if self.first_interrupt and self.start is not None:
                     #tak jest po mojemu:
-                    #log(self, "Waiting was interrupted, waiting to resume backoff...")
+                    # log(self, "Waiting was interrupted, waiting to resume backoff...")
                     all_waited = self.env.now - self.start
                     if all_waited <= Times.t_difs:
                         self.back_off_time -= Times.t_difs
-                        #log(self, f"Interupted in DIFS ({Times.t_difs}), backoff {self.back_off_time}, already waited: {all_waited}")
+                        # log(self, f"Interupted in DIFS ({Times.t_difs}), backoff {self.back_off_time}, already waited: {all_waited}")
                     else:
                         back_waited = all_waited - Times.t_difs
                         slot_waited = int(back_waited / Times.t_slot)
@@ -119,124 +100,9 @@ class WiFi():
                         #     f"Backoff decresed by {((slot_waited * Times.t_slot) + Times.t_difs)} new Backoff {self.back_off_time}")
                     self.first_interrupt = False
 
-
-    # def wait_back_off(self):
-    #     #global start
-    #     self.back_off_time = self.generate_new_back_off_time(
-    #         self.failed_transmissions_in_row)  # generating the new Back Off time
-
-    #     while self.back_off_time > -1:
-    #         try:
-    #             with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
-    #                 yield req
-    #             self.back_off_time += Times.t_difs  # add DIFS time
-    #             # log(self, f"Starting to wait backoff (with DIFS): ({self.back_off_time})u...")
-    #             self.first_interrupt = True
-    #             self.start = self.env.now  # store the current simulation time
-    #             self.channel.back_off_list.append(self)  # join the list off stations which are waiting Back Offs
-
-    #             yield self.env.timeout(self.back_off_time)  # join the environment action queue
-
-    #             # log(self, f"Backoff waited, sending frame...")
-    #             self.back_off_time = -1  # leave the loop
-
-    #             self.channel.back_off_list.remove(self)  # leave the waiting list as Backoff was waited successfully
-
-    #         except simpy.Interrupt:  # handle the interruptions from transmitting stations
-    #             if self.first_interrupt and self.start is not None:
-    #                 #tak jest po mojemu:
-    #                 # log(self, "Waiting was interrupted, waiting to resume backoff...")
-    #                 all_waited = self.env.now - self.start
-    #                 if all_waited <= Times.t_difs:
-    #                     self.back_off_time -= Times.t_difs
-    #                     # log(self, f"Interupted in DIFS ({Times.t_difs}), backoff {self.back_off_time}, already waited: {all_waited}")
-    #                 else:
-    #                     back_waited = all_waited - Times.t_difs
-    #                     slot_waited = int(back_waited / Times.t_slot)
-    #                     self.back_off_time -= ((slot_waited * Times.t_slot) + Times.t_difs)
-    #                     # log(self,
-    #                     #     f"Completed slots(9us) {slot_waited} = {(slot_waited * Times.t_slot)}  plus DIFS time {Times.t_difs}")
-    #                     # log(self,
-    #                     #     f"Backoff decresed by {((slot_waited * Times.t_slot) + Times.t_difs)} new Backoff {self.back_off_time}")
-    #                 self.first_interrupt = False
-                
-
-    # def send_frame(self):
-        
-    #     self.channel.transmission_attempt[self.name] += 1 
-    #     self.log_nru_minislot_busy_count()
-        
-    #     self.channel.tx_list.append(self)  # add station to currently transmitting list
-    #     res = self.channel.tx_queue.request(
-    #         priority=(big_num - self.frame_to_send.frame_time))  # create request basing on this station frame length
-
-    #     try:
-    #         result = yield res | self.env.timeout(
-    #             0)  # try to hold transmitting lock(station with the longest frame will get this)
-    #         # if res not in result:  # check if this station got lock, if not just wait you frame time
-    #         #     raise simpy.Interrupt("There is a longer frame...")
-
-
-    #         with self.channel.tx_lock.request() as lock:  # this station has the longest frame so hold the lock
-    #             yield lock
-
-
-    #             for station in self.channel.back_off_list:  # stop all station which are waiting backoff as channel is not idle
-    #                 if station.process.is_alive:
-    #                     station.process.interrupt()
-    #             for gnb in self.channel.back_off_list_NR:  # stop all station which are waiting backoff as channel is not idle
-    #                 if gnb.process.is_alive:
-    #                     gnb.process.interrupt()
-                
-    #             # Adding values to sim calculation
-    #             self.insert_channel_occupancy_wifi(self.env.now,self.frame_to_send.frame_time )
-
-    #             log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
-
-    #             yield self.env.timeout(self.frame_to_send.frame_time)  # wait this station frame time
-    #             self.channel.back_off_list.clear()  # channel idle, clear backoff waiting list
-    #             was_sent = self.check_collision()  # check if collision occurred
-
-    #             if was_sent:  # transmission successful
-    #                 self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
-    #                 yield self.env.timeout(self.times.get_ack_frame_time())  # wait ack
-    #                 self.channel.tx_list.clear()  # clear transmitting list
-    #                 self.channel.tx_list_NR.clear()
-    #                 self.channel.tx_queue.release(res)  # leave the transmitting queue
-
-    #                 return True
-
-    #             # there was collision
-    #             self.channel.airtime_data[self.name] += self.frame_to_send.frame_time
-    #             self.channel.tx_list.clear()  # clear transmitting list
-    #             self.channel.tx_list_NR.clear()
-    #             self.channel.tx_queue.release(res)  # leave the transmitting queue
-    #             self.channel.tx_queue = simpy.PreemptiveResource(self.env,
-    #                                                              capacity=1)  # create new empty transmitting queue
-    #             yield self.env.timeout(self.times.ack_timeout)  # simulate ack timeout after failed transmission
-                
-    #             self.channel.transmission_attempt[self.name] += 1 
-    #             return False
-
-    #     except simpy.Interrupt:  # this station does not have the longest frame, waiting frame time
-    #         #print("not longer frame",self.frame_to_send.frame_time, " ", res )
-    #         yield self.env.timeout(self.frame_to_send.frame_time)
-
-    #     #print("second was sent")
-    #     was_sent = self.check_collision()
-
-    #     if was_sent:  # check if collision occurred
-    #         # log(self, f'Waiting for ACK time: {self.times.get_ack_frame_time()}')
-    #         yield self.env.timeout(self.times.get_ack_frame_time())  # wait ack
-    #         self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
-    #     else:
-    #         # log(self, "waiting ack timeout slave")
-    #         yield self.env.timeout(Times.ack_timeout)  # simulate ack timeout after failed transmission
-    #         self.channel.transmission_failure[self.name] += 1 
-    #         self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
-    #     return was_sent
-
     def send_frame(self):
+        self.log_nru_minislot_busy_count()
+        
         self.channel.tx_list.append(self)  # add station to currently transmitting list
         res = self.channel.tx_queue.request(
             priority=(big_num - self.frame_to_send.frame_time))  # create request basing on this station frame length
@@ -259,11 +125,7 @@ class WiFi():
                     if gnb.process.is_alive:
                         gnb.process.interrupt()
 
-                # Adding values to sim calculation
-                self.insert_channel_occupancy_wifi(self.env.now,self.frame_to_send.frame_time )
-
-
-                log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
+                # log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
 
                 yield self.env.timeout(self.frame_to_send.frame_time)  # wait this station frame time
                 self.channel.back_off_list.clear()  # channel idle, clear backoff waiting list
@@ -292,13 +154,12 @@ class WiFi():
         was_sent = self.check_collision()
 
         if was_sent:  # check if collision occurred
-            log(self, f'Waiting for ACK time: {self.times.get_ack_frame_time()}')
+            # log(self, f'Waiting for ACK time: {self.times.get_ack_frame_time()}')
             yield self.env.timeout(self.times.get_ack_frame_time())  # wait ack
         else:
-            log(self, "waiting ack timeout slave")
+            # log(self, "waiting ack timeout slave")
             yield self.env.timeout(Times.ack_timeout)  # simulate ack timeout after failed transmission
         return was_sent
-
 
     def check_collision(self):  # check if the collision occurred
 
@@ -314,15 +175,8 @@ class WiFi():
                 self.cw_min + 1) - 1)  # define the upper limit basing on  unsuccessful transmissions in the row
         upper_limit = (
             upper_limit if upper_limit <= self.cw_max else self.cw_max)  # set upper limit to CW Max if is bigger then this parameter
-        
-        
-        back_off = random.randint(0, upper_limit-1)  # draw the back off value
-        # print(upper_limit)
-        # print(self.cw_max, self.cw_min)
-        #Logging wifi backoff value by wifi id
-        wifi_id_to_log_backoff = self.name+","+str(self.env.now)
-        #self.channel.wifi_backoff_value[wifi_id_to_log_backoff] = back_off
-        #self.channel.backoffs[back_off][self.channel.n_of_stations] += 1  # store drawn value for future analyzes
+        back_off = random.randint(0, upper_limit)  # draw the back off value
+        self.channel.backoffs[back_off][self.channel.n_of_stations] += 1  # store drawn value for future analyzes
         return back_off * self.times.t_slot
 
     def generate_new_frame(self):
@@ -331,13 +185,12 @@ class WiFi():
         return Frame(frame_length, self.name, self.col, self.config.data_size, self.env.now)
 
     def sent_failed(self):
-        log(self, "There was a collision")
+        # log(self, "There was a collision")
         self.frame_to_send.number_of_retransmissions += 1
         self.channel.failed_transmissions += 1
         self.failed_transmissions += 1
         self.failed_transmissions_in_row += 1
         # log(self, self.channel.failed_transmissions)
-        self.channel.airtime_data[self.name] += self.frame_to_send.frame_time
         if self.frame_to_send.number_of_retransmissions > self.config.r_limit:
             self.frame_to_send = self.generate_new_frame()
             self.failed_transmissions_in_row = 0
@@ -371,23 +224,4 @@ class WiFi():
                 #print(i)
                 busy_slot_time = (i-self.channel.minislot_log_start_time) 
                 self.channel.slot_nru_active[busy_slot_time] = 0
-
-
-    def insert_channel_occupancy_wifi(self, time, channel_occupancy):
-
-        try:
-            if time in self.channel.new_channel_occupancy_wifi:
-                if self.channel.new_channel_occupancy_wifi[time]>channel_occupancy:
-                    self.channel.new_channel_occupancy_wifi = self.channel.new_channel_occupancy_wifi[time]
-                
-            if time in self.channel.new_channel_occupancy_nru:
-                if self.channel.new_channel_occupancy_nru[time]>channel_occupancy:
-                    self.channel.new_channel_occupancy_wifi[time] = self.channel.new_channel_occupancy_nru[time]
-            
-            else:
-                self.channel.new_channel_occupancy_wifi[time] = channel_occupancy
-
-        except KeyError:
-            self.channel.new_channel_occupancy_wifi[time] = channel_occupancy
-
-            
+    
