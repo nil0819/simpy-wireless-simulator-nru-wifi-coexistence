@@ -18,11 +18,10 @@ Simulator created for based on the master thesis `Jakub_Cichon_Master_s_Thesis.p
 
 ## Structure
 
-Main program is located in `coexistanceSimpy` module.
 
 `singleRun.py` and `changingNodesNumber.py` - scripts used for running simulations scenarios
 
-`validation.py` and `resultAnalysis.py` - scripts used for plotting obtained results 
+
 
 
 ## Usage
@@ -61,6 +60,12 @@ Options:
   --help                          Show this message and exit.
 
 ```
+### Branches
+
+- cad-attack-model-1-version1 - Channel access deterence attack model 1 (deterministic approach)
+- cad-resilience-model-RS-gap-hybrid-model-2- Hybrid RS-Gap based Resilience Strategy against CAD attack 
+
+
 ##### Usage
 ```bash
 python singleRun.py --ap-number 2 --gnb-number 2 -t 10 -r 1
@@ -136,6 +141,14 @@ SEED = 1 N_stations:=2 N_gNB:=2  CW_MIN = 15 CW_MAX = 63 WiFi pcol:=0.1217 WiFi 
 fairness: 0.5398053473945499
 joint: 0.4984111300570852
 ```
+
+#### Citation
+
+Please feel free to cite the following works 
+
+[1] J. Cichon. A Wi-Fi and NR-U Coexistence Channel Access Simulator based on the Python SimPy Library. [Online]. Available: https://github.com/CichonJakub/5G-Coexistence-SimPy
+[2] Rahman, Md Rashedur, and Moinul Hossain. "Rancad: Random channel access deterrence attack against spectrum coexistence between nr-u and wi-fi on the 5ghz unlicensed band." ICC 2024-IEEE International Conference on Communications. IEEE, 2024.
+[3] Rahman, Md Rashedur, et al. "Channel Access Deterrence Attack: An Attack against Spectrum Coexistence between NR-U and Wi-Fi in the 5 GHz Band." Proceedings of IEEE INFOCOM 2025, IEEE, 2025.
 
 
 
