@@ -1,7 +1,7 @@
 # A Wi-Fi and NR-U Coexistence Channel Access Simulator based on the Python SimPy Library
 
 ## Intro
-Simulator created for master thesis `Jakub_Cichon_Master_s_Thesis.pdf` by Jakub Cichoń, based on two existing implementations:
+Simulator created for based on the master thesis `Jakub_Cichon_Master_s_Thesis.pdf` by Jakub Cichoń which was based on two existing implementations:
 * [Wi-Fi simulator](https://github.com/ToporPawel/DCF-Simpy)
 * [NR-U simulator](https://github.com/marekzajac97/nru-channel-access)
 
@@ -9,6 +9,12 @@ Simulator created for master thesis `Jakub_Cichon_Master_s_Thesis.pdf` by Jakub 
 
 - (Optional) Launch virtual env: `python3 -m venv env && source env/bin/activate`
 - Install requirements : `pip install -r requirements.txt`
+- The following libraries are required
+  - Click
+  - simpy
+  - pandas
+  - matplotlib
+  - scipy
 
 ## Structure
 
