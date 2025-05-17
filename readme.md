@@ -1,7 +1,7 @@
 # A Wi-Fi and NR-U Coexistence Channel Access Simulator based on the Python SimPy Library
 
 ## Intro
-Simulator created for master thesis `Jakub_Cichon_Master_s_Thesis.pdf` by Jakub Cichoń, based on two existing implementations:
+Simulator created based on the master thesis `Jakub_Cichon_Master_s_Thesis.pdf` by Jakub Cichoń, which is based on two existing implementations:
 * [Wi-Fi simulator](https://github.com/ToporPawel/DCF-Simpy)
 * [NR-U simulator](https://github.com/marekzajac97/nru-channel-access)
 
@@ -16,7 +16,7 @@ Main program is located in `coexistanceSimpy` module.
 
 `singleRun.py` and `changingNodesNumber.py` - scripts used for running simulations scenarios
 
-`validation.py` and `resultAnalysis.py` - scripts used for plotting obtained results 
+This branch is utilized for demonstating resilience framework called Hyrbrid RS-Gap approach against the CAD attack. Example simulation runs are provided here for implementing different attack scenario with various attack probabilities.
 
 
 ## Usage
@@ -52,6 +52,7 @@ Options:
   -nru_obser_slots, --nru_observation_slot INTEGER
                                   amount of observation slots for NR_U
   --mcot INTEGER                  Max channel occupancy time for NR-U (ms)
+  --n_t_p INTEGER                Transmission probability of NR-U. Helps to show the attack probability. attack probability= (100-trasmission probability)/100 (default-100)
   --help                          Show this message and exit.
 
 ```
