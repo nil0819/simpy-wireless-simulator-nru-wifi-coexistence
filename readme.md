@@ -1,9 +1,11 @@
 # A Wi-Fi and NR-U Coexistence Channel Access Simulator based on the Python SimPy Library
 
 ## Intro
-Simulator created for master thesis `Jakub_Cichon_Master_s_Thesis.pdf` by Jakub Cichoń, based on two existing implementations:
+Simulator created based on the master thesis `Jakub_Cichon_Master_s_Thesis.pdf` by Jakub Cichoń, which was based on two existing implementations:
 * [Wi-Fi simulator](https://github.com/ToporPawel/DCF-Simpy)
 * [NR-U simulator](https://github.com/marekzajac97/nru-channel-access)
+
+This branch is utilized for demonstating the CAD attack with deterministic approach. At the same time, CAD attack with random approach can also be implemented using the logic provided in the nru.py. Example simulation runs are provided here for implementing different attack scenario with various attack probabilities.
 
 ## Installation
 
@@ -16,7 +18,6 @@ Main program is located in `coexistanceSimpy` module.
 
 `singleRun.py` and `changingNodesNumber.py` - scripts used for running simulations scenarios
 
-`validation.py` and `resultAnalysis.py` - scripts used for plotting obtained results 
 
 
 ## Usage
@@ -52,6 +53,7 @@ Options:
   -nru_obser_slots, --nru_observation_slot INTEGER
                                   amount of observation slots for NR_U
   --mcot INTEGER                  Max channel occupancy time for NR-U (ms)
+  --n_t_p INTEGER                Transmission probability of NR-U. Helps to show the attack probability. attack probability= (100-trasmission probability)/100 (default-100)
   --help                          Show this message and exit.
 
 ```
@@ -205,5 +207,10 @@ fairness: 0.5398053473945499
 joint: 0.4984111300570852 -->
 ```
 
+Please feel free to cite the following works
+
+-[1] J. Cichon. A Wi-Fi and NR-U Coexistence Channel Access Simulator based on the Python SimPy Library. [Online]. Available: https://github.com/CichonJakub/5G-Coexistence-SimPy.
+-[2] Rahman, Md Rashedur, and Moinul Hossain. "Rancad: Random channel access deterrence attack against spectrum coexistence between nr-u and wi-fi on the 5ghz unlicensed band." ICC 2024-IEEE International Conference on Communications. IEEE, 2024.
+-[3] Rahman, Md Rashedur, et al. "Channel Access Deterrence Attack: An Attack against Spectrum Coexistence between NR-U and Wi-Fi in the 5 GHz Band." Proceedings of IEEE INFOCOM 2025, IEEE, 2025.
 
 
