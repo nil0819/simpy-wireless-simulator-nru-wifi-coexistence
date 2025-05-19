@@ -207,7 +207,7 @@ fairness: 0.5398053473945499
 joint: 0.4984111300570852 -->
 ```
 
-Please feel free to cite the following works
+Please consider citing the following works if relevant to your research
 
 -[1] J. Cichon. A Wi-Fi and NR-U Coexistence Channel Access Simulator based on the Python SimPy Library. [Online]. Available: https://github.com/CichonJakub/5G-Coexistence-SimPy.
 -[2] Rahman, Md Rashedur, and Moinul Hossain. "Rancad: Random channel access deterrence attack against spectrum coexistence between nr-u and wi-fi on the 5ghz unlicensed band." ICC 2024-IEEE International Conference on Communications. IEEE, 2024.
