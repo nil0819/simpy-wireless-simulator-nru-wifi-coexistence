@@ -1,12 +1,22 @@
 from common import *
-from wifi import *
-from nru import * 
-from channel import *
-from roguewificad import *
-from roguewifiselfbackoff import *
-from roguewifijammer import *
+from nru.ue import NrUE
+from wifi.wifi import *
+from nru.nru import * 
+from channel.channel import *
+from attacker.roguewificad import *
+# from roguewifiselfbackoff import *
+# from roguewifijammer import *
+# Rashed-Step 1.D_2-12-26-2025-start
+from wifi.sta import *
+# Rashed-Step 1.D_2-12-26-2025-end
 
 
+# Rashed-Step 1.D_2-12-26-2025-start
+def rand_pos_near(center:Pos, radius:float) -> Pos:
+    angle = random.uniform(0, 2*math.pi)
+    r = radius * math.sqrt(random.random())
+    return (center[0] + r*math.cos(angle), center[1] + r*math.sin(angle))
+# Rashed-Step 1.D_2-12-26-2025-end
 
 
 
@@ -22,7 +32,13 @@ def run_simulation(
         airtime_control: Dict[str, int],
         airtime_data_NR: Dict[str, int],
         airtime_control_NR: Dict[str, int],
-        is_rogue_wifi: bool
+        is_rogue_wifi: bool,
+        # Rashed-Step 1.D_1-12-26-2025-start
+        area_w: float = 50.0,
+        area_h: float = 50.0,
+        wifi_stas_per_ap: int = 1,
+        nr_ues_per_gnb: int = 1
+        # Rashed-Step 1.D_1-12-26-2025-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -40,6 +56,78 @@ def run_simulation(
 
     
 
+    # Rashed-Step 1.D_2-12-26-2025-start
+    wifi_aps = []
+    wifi_stas = []
+
+    for i in range(1, number_of_stations + 1):
+        ap_name = f"AP {i}"
+        ap_pos = rand_pos(area_w, area_h)
+
+        stas_for_ap = []
+        for k in range(1, wifi_stas_per_ap + 1):
+            sta = WiFiSTA(
+                name=f"STA {i}-{k}",
+                pos=rand_pos_near(ap_pos, radius=10.0),
+                ap_name=ap_name
+            )
+            stas_for_ap.append(sta)
+            wifi_stas.append(sta)
+    ap = WiFi(
+        environment,
+        ap_name,
+        channel,
+        ap_pos,
+        stas_for_ap,
+        config
+    )
+    wifi_aps.append(ap)
+    # Rashed-Step 1.D_2-12-26-2025-end
+
+    # Rashed-Step 1.D_3-12-26-2025-start
+    gnbs = []
+    ues = []
+    for i in range(1, number_of_gnb + 1):
+        gnb_name = f"Gnb {i}"
+        gnb_pos = rand_pos(area_w, area_h)
+
+        ues_for_gnb = []
+        for k in range(1, nr_ues_per_gnb + 1):
+            ue = NrUE(
+                name=f"UE {i}-{k}",
+                pos=rand_pos_near(gnb_pos, radius=15.0),
+                gnb_name=gnb_name
+            )
+            ues_for_gnb.append(ue)
+            ues.append(ue)
+    g = Gnb(
+        environment,
+        gnb_name,
+        channel,
+        gnb_pos,
+        ues_for_gnb,
+        configNr
+    )
+    gnbs.append(g)
+    # Rashed-Step 1.D_3-12-26-2025-end
+
+    # Rashed-Step 1.E-12-26-2025-start
+    print("=== Wi-Fi Topology ===")
+    for ap in wifi_aps:
+        print(ap.name, ap.pos)
+        for sta in ap.sta_list:
+            print("  ", sta.name, sta.pos, "d=", dist(ap.pos, sta.pos))
+
+    print("=== NR-U Topology ===")
+    for gnb in gnbs:
+        print(gnb.name, gnb.pos)
+        for ue in gnb.ue_list:
+            print("  ", ue.name, ue.pos, "d=", dist(gnb.pos, ue.pos))
+    # Rashed-Step 1.E-12-26-2025-end
+
+
+
+
     # is_wifi_rogue = 0 if rogue_wifi else 1
 
     # print(is_wifi_rogue)
@@ -55,22 +143,24 @@ def run_simulation(
 
     config_nr = Config_NR()
     
-
-    for i in range(1, number_of_stations + 1):
-        if is_rogue_wifi:
-            print("Rogue WiFi")
-            RogueWiFiCAD(environment, "Station {}".format(i), channel, config)
-            #RogueWiFiSelfBackoff(environment, "Station {}".format(i), channel, config)
-            #RogueWiFiJammer(environment, "Station {}".format(i), channel, config)
-        else:
-            print("Benign WiFi")
-            WiFi(environment, "Station {}".format(i), channel, config)
+    # Rashed-Step 1.E-12-26-2025-start
+    # for i in range(1, number_of_stations + 1):
+    #     if is_rogue_wifi:
+    #         print("Rogue WiFi")
+    #         #RogueWiFiCAD(environment, "Station {}".format(i), channel, config)
+    #         #RogueWiFiSelfBackoff(environment, "Station {}".format(i), channel, config)
+    #         #RogueWiFiJammer(environment, "Station {}".format(i), channel, config)
+    #     else:
+    #         print("Benign WiFi")
+    #         WiFi(environment, "Station {}".format(i), channel, config)
+    # Rashed-Step 1.E-12-26-2025-end
 
         
-
-    for i in range(1, number_of_gnb + 1):
-        # Gnb(environment, "Gnb {}".format(i), channel, config_nr)
-        Gnb(environment, "Gnb {}".format(i), channel, configNr)
+    # Rashed-Step 1.E-12-26-2025-start
+    # for i in range(1, number_of_gnb + 1):
+    #     # Gnb(environment, "Gnb {}".format(i), channel, config_nr)
+    #     Gnb(environment, "Gnb {}".format(i), channel, configNr)
+    # Rashed-Step 1.E-12-26-2025-end
         
         
 
@@ -191,3 +281,6 @@ def run_simulation(
              p_coll,
              normalized_channel_occupancy_time_NR, normalized_channel_efficiency_NR, p_coll_NR,
              normalized_channel_occupancy_time_all, normalized_channel_efficiency_all])
+        
+
+

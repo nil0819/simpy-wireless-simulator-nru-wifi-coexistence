@@ -6,6 +6,13 @@ import time
 import pandas as pd
 import simpy
 
+
+# Rashed-Step 1.A-12-26-2025-start
+from typing import Tuple
+import math
+# Rashed-Step 1.A-12-26-2025-end
+
+
 from dataclasses import dataclass, field
 from typing import Dict, List
 
@@ -48,6 +55,19 @@ def log(gnb, mes: str) -> None:
 gap = True
 
 big_num = 100000  # some big number for quesing in peeemtive resources - big starting point
+
+
+# Rashed-Step 1.A-12-26-2025-start
+Pos = Tuple[float, float]
+
+def dist(a: Pos, b: Pos) -> float:
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+def rand_pos(area_w: float, area_h: float) -> Pos:
+    return (random.uniform(0, area_w), random.uniform(0, area_h))
+
+# Rashed-Step 1.A-12-26-2025-end
+
 
 
 
