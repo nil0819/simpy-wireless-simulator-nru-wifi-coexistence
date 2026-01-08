@@ -1,6 +1,9 @@
-from common import *
+from common.common import *
 from Times import *
-from common import Pos
+from common.common import Pos
+# Rashed-Step 2.D_1-01-08-2026-start
+from common.common_phy import dist, rx_power_dbm
+# Rashed-Step 2.D_1-01-08-2026-end
 
 
 
@@ -13,6 +16,12 @@ class Config:
     cw_max: int = 63  # max cw window size 1023 def
     r_limit: int = 7
     mcs: int = 7
+
+    # Rashed-Step 2.C_1-12-26-2025-start
+    tx_power_dbm: float = 20.0 
+    f_ghz: float = 5.18e9
+    pl_exp : float = 3.0        #indoor-ish
+    # Rashed-Step 2.C_1-12-26-2025-end
 
 
 
@@ -129,6 +138,10 @@ class WiFi:
 
                 log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
 
+                # Rashed-Step 2.E-01-08-2026-start
+                if self.frame_to_send.pr_dbm is not None:
+                    log(self, f"Frame TX pos: {self.frame_to_send.tx_pos}, RX pos: {self.frame_to_send.rx_pos}, Distance: {self.frame_to_send.distance_m} m, Pr: {self.frame_to_send.pr_dbm} dBm")
+                # Rashed-Step 2.E-01-08-2026-end
                 yield self.env.timeout(self.frame_to_send.frame_time)  # wait this station frame time
                 self.channel.back_off_list.clear()  # channel idle, clear backoff waiting list
                 was_sent = self.check_collision()  # check if collision occurred
@@ -184,7 +197,30 @@ class WiFi:
     def generate_new_frame(self):
         # frame_length = self.times.get_ppdu_frame_time()
         frame_length = 5400
-        return Frame(frame_length, self.name, self.col, self.config.data_size, self.env.now)
+
+        # Rashed-Step 2.D_1-01-08-2026-start
+
+        rx_sta = random.choice(self.sta_list) if self.sta_list else None
+
+        fr = Frame (frame_length, self.name, self.col, self.config.data_size, self.env.now)
+
+        fr.tx_pos = self.pos
+        if rx_sta is not None:
+            fr.rx_name = rx_sta.name
+            fr.rx_pos = rx_sta.pos
+            fr.distance_m = dist(self.pos, rx_sta.pos)
+            fr.pr_dbm = rx_power_dbm(
+                tx_power_dbm=self.config.tx_power_dbm,
+                d_m=fr.distance_m,
+                f_hz=self.config.f_ghz,
+                n=self.config.pl_exp
+            )
+
+        return fr
+
+        #return Frame(frame_length, self.name, self.col, self.config.data_size, self.env.now)
+
+        # Rashed-Step 2.D_1-01-08-2026-end
 
     def sent_failed(self):
         log(self, "There was a collision")

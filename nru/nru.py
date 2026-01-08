@@ -1,5 +1,11 @@
-from common import *
+from common.common import *
 from Times import *
+from common.common import Pos
+# Rashed-Step 2.D_2-01-08-2026-start
+from common.common_phy import rx_power_dbm, dist
+# Rashed-Step 2.D_2-01-08-2026-end
+
+
 
 
 @dataclass()
@@ -16,6 +22,12 @@ class Config_NR:
     cw_max: int = 63
     mcot: int = 6  # max ocupancy time
 
+    # Rashed-Step 2.C_2-12-26-2025-start
+    tx_power_dbm: float = 23.0 
+    f_ghz: float = 5.18e9
+    pl_exp : float = 3.0        #indoor-ish
+    # Rashed-Step 2.C_2-12-26-2025-end
+
 
 
 @dataclass()
@@ -30,6 +42,14 @@ class Transmission_NR:
     t_end: int = None  # sent time / transsmision end = start + rs_time + airtime
     t_to_send: int = None
     collided: bool = False  # true if transmission colided with another one
+
+    # Rashed-Step 2.B_2-12-30-2025-start
+    tx_pos: Pos = None
+    rx_name: str = None
+    rx_pos: Pos = None
+    distance_m: float = None
+    pr_dbm: float = None
+    # Rashed-Step 2.B_2-12-30-2025-end
 
 
 
@@ -285,6 +305,11 @@ class Gnb:
                     f'Transmission will be for: {self.transmission_to_send.transmission_time} time')
                 #print('GNB is transmitting now at ', self.env.now)
 
+                # Rashed-Step 2.E-01-08-2026-start
+                if self.transmission_to_send.pr_dbm is not None:
+                     log(self, f"TX-> {self.transmission_to_send.rx_name} d={self.transmission_to_send.distance_m:.2f}m Pr={self.transmission_to_send.pr_dbm:.1f} dBm")
+                # Rashed-Step 2.E-01-08-2026-end
+                
                 yield self.env.timeout(self.transmission_to_send.transmission_time)
 
                 # channel idle, clear backoff waiting list
@@ -338,13 +363,41 @@ class Gnb:
                 return True
 
     def gen_new_transmission(self):
-        transmission_time = self.config_nr.mcot * 1000  # transforming to usec
-        if gap:
-            rs_time = 0
-        else:
-            rs_time = self.next_sync_slot_boundry - self.env.now
+        # Rashed-Step 2.D_2-01-08-2026-start
+        
+        # transmission_time = self.config_nr.mcot * 1000  # transforming to usec
+        # if gap:
+        #     rs_time = 0
+        # else:
+        #     rs_time = self.next_sync_slot_boundry - self.env.now
+        # airtime = transmission_time - rs_time
+        # return Transmission_NR(transmission_time, self.name, self.col, self.env.now, airtime, rs_time)
+        
+        transmission_time = self.config_nr.mcot * 1000
+        rs_time = 0 if gap else (self.next_sync_slot_boundry - self.env.now)
         airtime = transmission_time - rs_time
-        return Transmission_NR(transmission_time, self.name, self.col, self.env.now, airtime, rs_time)
+
+        rx_ue = random.choice(self.ue_list) if self.ue_list else None
+
+        tx = Transmission_NR(
+            transmission_time, self.name, self.col, self.env.now, airtime, rs_time)
+        
+        tx.tx_pos = self.pos
+        if rx_ue is not None:
+            tx.rx_name = rx_ue.name
+            tx.rx_pos = rx_ue.pos
+            tx.distance_m = dist(self.pos, rx_ue.pos)
+
+            tx.pr_dbm = rx_power_dbm(
+                tx_power_dbm=self.config_nr.tx_power_dbm,
+                d_m= tx.distance_m,
+                f_hz=self.config_nr.f_ghz, 
+                n = self.config_nr.pl_exp
+            )
+
+        return tx
+        
+        # Rashed-Step 2.D_2-01-08-2026-end
 
     def generate_new_back_off_time(self, failed_transmissions_in_row):
         # BACKOFF TIME GENERATION

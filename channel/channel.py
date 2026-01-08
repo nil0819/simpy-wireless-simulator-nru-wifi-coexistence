@@ -1,4 +1,4 @@
-from common import *
+from common.common import *
 from wifi.wifi import *
 from nru.nru import *
 

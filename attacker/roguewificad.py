@@ -1,7 +1,7 @@
 
 
 
-from common import *
+from common.common import *
 from Times import *
 from channel import *
 

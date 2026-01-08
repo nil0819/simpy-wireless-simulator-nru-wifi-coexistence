@@ -1,7 +1,7 @@
 # Rashed-Step 1.B_1-12-26-2025-start
 
 from dataclasses import dataclass
-from common import Pos
+from common.common import Pos
 
 
 @dataclass

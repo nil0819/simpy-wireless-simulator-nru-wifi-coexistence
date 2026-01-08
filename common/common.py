@@ -70,19 +70,40 @@ def rand_pos(area_w: float, area_h: float) -> Pos:
 
 
 
+# Rashed-Step 2.B-12-30-2025-start
+# @dataclass()
+# class Frame:
+#     frame_time: int  # time of the frame
+#     station_name: str  # name of the owning it station
+#     col: str  # output color
+#     data_size: int  # payload size
+#     t_start: int  # generation time
+#     number_of_retransmissions: int = 0  # retransmissions count
+#     t_end: int = None  # sent time
+#     t_to_send: int = None  # how much time it took to sent successfully
 
+#     def __repr__(self):
+#         return (self.col + "Frame: start=%d, end=%d, frame_time=%d, retransmissions=%d"
+#                 % (self.t_start, self.t_end, self.t_to_send, self.number_of_retransmissions)
+#                 )
+ # Rashed-Step 2.B-12-30-2025-end   
+
+# Rashed-Step 2.B_1-12-30-2025-start
 @dataclass()
 class Frame:
-    frame_time: int  # time of the frame
-    station_name: str  # name of the owning it station
-    col: str  # output color
-    data_size: int  # payload size
-    t_start: int  # generation time
-    number_of_retransmissions: int = 0  # retransmissions count
-    t_end: int = None  # sent time
-    t_to_send: int = None  # how much time it took to sent successfully
+    frame_time: int
+    station_name: str
+    col: str
+    data_size: int
+    t_start: int
+    number_of_retransmissions: int = 0
+    t_end: int = None
+    t_to_send: int = None
 
-    def __repr__(self):
-        return (self.col + "Frame: start=%d, end=%d, frame_time=%d, retransmissions=%d"
-                % (self.t_start, self.t_end, self.t_to_send, self.number_of_retransmissions)
-                )
+    # NEW: topology + link info
+    tx_pos: Pos = None
+    rx_name: str = None
+    rx_pos: Pos = None
+    distance_m: float = None
+    pr_dbm: float = None
+# Rashed-Step 2.B_1-12-30-2025-end
