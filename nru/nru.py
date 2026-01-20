@@ -5,6 +5,10 @@ from common.common import Pos
 from common.common_phy import rx_power_dbm, dist
 # Rashed-Step 2.D_2-01-08-2026-end
 
+# Rashed-Step 3.E_3-01-12-2026-start
+from channel.channel import ActiveTx
+# Rashed-Step 3.E_3-01-12-2026-end
+
 
 
 
@@ -28,12 +32,16 @@ class Config_NR:
     pl_exp : float = 3.0        #indoor-ish
     # Rashed-Step 2.C_2-12-26-2025-end
 
+    # Rashed-Step 3.A-12-26-2025-start
+    ed_threshold_dbm: float = -72.0   # example; tune later
+    # Rashed-Step 3.A-12-26-2025-end
+
 
 
 @dataclass()
 class Transmission_NR:
     transmission_time: int
-    enb_name: str  # name of the owning it station
+    gnb_name: str  # name of the owning it station
     col: str
     t_start: int  # generation time / transmision start (including RS)
     airtime: int  # time spent on sending data
@@ -50,6 +58,8 @@ class Transmission_NR:
     distance_m: float = None
     pr_dbm: float = None
     # Rashed-Step 2.B_2-12-30-2025-end
+
+    
 
 
 
@@ -101,6 +111,9 @@ class Gnb:
         # Rashed-Step 1.C_2-12-26-2025-end
 
     def start(self):
+        # Rashed-Step 3.F-12-26-2025-start
+        #print(self.env.now, self.name, "START LOOP")
+        # Rashed-Step 3.F-12-26-2025-end
 
         # yield self.env.timeout(self.desync)
         while True:
@@ -108,13 +121,68 @@ class Gnb:
             was_sent = False
             while not was_sent:
                 if gap:
-                    self.process = self.env.process(self.wait_back_off_gap())
+                    # Rashed-Step 3.E_2-01-12-2026-start
+                    #self.process = self.env.process(self.wait_back_off_gap())
+                    self.process = self.env.process(self.wait_back_off_gap_after())
+                    # Rashed-Step 3.E_2-01-12-2026-end
                     yield self.process
                     was_sent = yield self.env.process(self.send_transmission())
                 else:
                     self.process = self.env.process(self.wait_back_off())
                     yield self.process
                     was_sent = yield self.env.process(self.send_transmission())
+
+    # Rashed-Step 3.E_2-01-12-2026-start
+
+    def wait_back_off_gap_after(self):
+
+        pp = self.config_nr.deter_period + self.config_nr.M * self.config_nr.observation_slot_duration
+        backoff_slots = self.generate_backoff_slots(self.failed_transmissions_in_row)
+        backoff_time = pp + backoff_slots * self.config_nr.observation_slot_duration
+
+        remaining = backoff_time
+
+        while remaining > 0:
+            if self.channel.is_busy(self.pos, self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name):
+                log(self, f"Channel busy during backoff, pausing backoff with {remaining} us remaining")
+                yield self.channel.state_changed
+                continue
+
+            step = min(self.config_nr.observation_slot_duration, remaining)
+            yield self.env.timeout(step)
+            remaining -= step
+
+        
+        time_to_next_sync_slot = self.next_sync_slot_boundry - self.env.now
+        while time_to_next_sync_slot <= 0:
+            time_to_next_sync_slot += self.config_nr.synchronization_slot_duration
+            log(self,
+                f'Backoff finished but next sync slot was in the past, new time to next possible sync = {time_to_next_sync_slot}')
+            
+        # gap_time = time_to_next_sync_slot
+        # log(self, f"Waiting gap period of : {gap_time} us")
+        # yield self.env.timeout(gap_time)
+
+        gap_remaining = time_to_next_sync_slot
+
+        log(self, f"Starting gap period of : {gap_remaining} us")
+
+        while gap_remaining > 0:
+            if self.channel.is_busy(self.pos, self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name):
+                log(self, f"Channel busy during gap, pausing gap with {gap_remaining} us remaining")
+                yield self.channel.state_changed
+                continue
+
+            step = min (self.config_nr.observation_slot_duration, gap_remaining)
+            yield self.env.timeout(step)
+            gap_remaining -= step
+        
+        log(self, "Finished GAP-after-backoff (reached sync boundary)")
+
+        return
+
+
+    # Rashed-Step 3.E_2-01-12-2026-end
 
     def wait_back_off_gap(self):
         self.back_off_time = self.generate_new_back_off_time(
@@ -277,90 +345,82 @@ class Gnb:
             yield self.env.timeout(self.config_nr.synchronization_slot_duration)
 
     def send_transmission(self):
-        # add station to currently transmitting list
-        self.channel.tx_list_NR.append(self)
         self.transmission_to_send = self.gen_new_transmission()
-        res = self.channel.tx_queue.request(priority=(
-            big_num - self.transmission_to_send.transmission_time))  # create request basing on this station frame length
 
-        try:
-            result = yield res | self.env.timeout(
-                0)  # try to hold transmitting lock(station with the longest frame will get this)
+        with self.channel.tx_queue.request(priority=(big_num - self.transmission_to_send.transmission_time)) as req:
+            yield req
 
-            if res not in result:  # check if this station got lock, if not just wait you frame time
-                raise simpy.Interrupt("There is a longer frame...")
-
-            with self.channel.tx_lock.request() as lock:  # this station has the longest frame so hold the lock
+            with self.channel.tx_lock.request() as lock:
                 yield lock
 
-                # stop all station which are waiting backoff as channel is not idle
-                for station in self.channel.back_off_list:
-                    if station.process.is_alive:
-                        station.process.interrupt()
-                for gnb in self.channel.back_off_list_NR:  # stop all station which are waiting backoff as channel is not idle
-                    if gnb.process.is_alive:
-                        gnb.process.interrupt()
+            log(self, f'Starting transmission: {self.transmission_to_send.transmission_time}')
 
-                log(self,
-                    f'Transmission will be for: {self.transmission_to_send.transmission_time} time')
-                #print('GNB is transmitting now at ', self.env.now)
+            tx_start = self.env.now
+            tx_dur = self.transmission_to_send.transmission_time
 
-                # Rashed-Step 2.E-01-08-2026-start
-                if self.transmission_to_send.pr_dbm is not None:
-                     log(self, f"TX-> {self.transmission_to_send.rx_name} d={self.transmission_to_send.distance_m:.2f}m Pr={self.transmission_to_send.pr_dbm:.1f} dBm")
-                # Rashed-Step 2.E-01-08-2026-end
-                
-                yield self.env.timeout(self.transmission_to_send.transmission_time)
+            active = ActiveTx(
+                tx_id=self.name,
+                tx_pos=self.pos,
+                tx_start=tx_start,
+                tx_power_dbm=self.config_nr.tx_power_dbm,
+                f_hz=self.config_nr.f_ghz,
+                pl_exp=self.config_nr.pl_exp,
+                t_end=tx_start + tx_dur,
+                tech="NRU"
+            )
+            self.channel.register_tx(active)
 
-                # channel idle, clear backoff waiting list
-                self.channel.back_off_list_NR.clear()
-                was_sent = self.check_collision()  # check if collision occurred
+            try:
+                yield self.env.timeout(tx_dur)
+                was_sent = self.check_collision()
+            finally:
+                self.channel.unregister_tx(active)
 
-                if was_sent:  # transmission successful
-                    self.channel.airtime_control_NR[self.name] += self.transmission_to_send.rs_time
-                    log(self,
-                        f"adding rs time to control data: {self.transmission_to_send.rs_time}")
-                    self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
-                    log(self,
-                        f"adding data airtime to data: {self.transmission_to_send.airtime}")
-                    self.channel.tx_list_NR.clear()  # clear transmitting list
-                    self.channel.tx_list.clear()
-                    # leave the transmitting queue
-                    self.channel.tx_queue.release(res)
-                    return True
+        # after leaving the 'with', resource is released automatically
 
-            # there was collision
-            self.channel.tx_list_NR.clear()  # clear transmitting list
-            self.channel.tx_list.clear()
-            self.channel.tx_queue.release(res)  # leave the transmitting queue
-            self.channel.tx_queue = simpy.PreemptiveResource(self.env,
-                                                             capacity=1)  # create new empty transmitting queue
-            # yield self.env.timeout(self.times.ack_timeout)
+        if was_sent:
+            self.channel.airtime_control_NR[self.name] += self.transmission_to_send.rs_time
+            self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
+            return True
+        else:
             return False
-
-        except simpy.Interrupt:  # this station does not have the longest frame, waiting frame time
-            yield self.env.timeout(self.transmission_to_send.transmission_time)
-
-        was_sent = self.check_collision()
-        return was_sent
 
     def check_collision(self):  # check if the collision occurred
 
-        if gap:
-            # if (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) > 1 and self.waiting_backoff is True:
-            if (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) > 1 or (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) == 0:
-                self.sent_failed()
-                return False
-            else:
-                self.sent_completed()
-                return True
-        else:
-            if (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) > 1 or (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) == 0:
-                self.sent_failed()
-                return False
-            else:
-                self.sent_completed()
-                return True
+        # if gap:
+        #     # if (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) > 1 and self.waiting_backoff is True:
+        #     if (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) > 1 or (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) == 0:
+        #         self.sent_failed()
+        #         return False
+        #     else:
+        #         self.sent_completed()
+        #         return True
+        # else:
+        #     if (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) > 1 or (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) == 0:
+        #         self.sent_failed()
+        #         return False
+        #     else:
+        #         self.sent_completed()
+        #         return True
+        # Rashed-Step 3.F-01-13-2026-start
+        # ok = all(t.tx_id == self.name for t in self.channel.active_txs)
+        # (self.sent_completed() if ok else self.sent_failed())
+        # return ok
+        mine = any(t.tx_id == self.name for t in self.channel.active_txs)
+
+        if not mine:
+            self.sent_failed()
+            return False
+        
+        others = [t for t in self.channel.active_txs if t.tx_id != self.name]
+        
+        if others:
+            self.sent_failed()
+            return False
+        
+        self.sent_completed()
+        return True
+        # Rashed-Step 3.F-01-13-2026-end
 
     def gen_new_transmission(self):
         # Rashed-Step 2.D_2-01-08-2026-start
@@ -399,16 +459,27 @@ class Gnb:
         
         # Rashed-Step 2.D_2-01-08-2026-end
 
-    def generate_new_back_off_time(self, failed_transmissions_in_row):
-        # BACKOFF TIME GENERATION
-        upper_limit = (pow(2, failed_transmissions_in_row) * (
-            self.cw_min + 1) - 1)  # define the upper limit basing on  unsuccessful transmissions in the row
-        upper_limit = (
-            upper_limit if upper_limit <= self.cw_max else self.cw_max)  # set upper limit to CW Max if is bigger then this parameter
-        back_off = random.randint(0, upper_limit)  # draw the back off value
-        # store drawn value for future analyzes
-        self.channel.backoffs[back_off][self.channel.n_of_stations] += 1
-        return back_off * self.config_nr.observation_slot_duration
+
+    # Rashed-Step 3.E_1-12-26-2025-start
+    # def generate_new_back_off_time(self, failed_transmissions_in_row):
+    #     # BACKOFF TIME GENERATION
+    #     upper_limit = (pow(2, failed_transmissions_in_row) * (
+    #         self.cw_min + 1) - 1)  # define the upper limit basing on  unsuccessful transmissions in the row
+    #     upper_limit = (
+    #         upper_limit if upper_limit <= self.cw_max else self.cw_max)  # set upper limit to CW Max if is bigger then this parameter
+    #     back_off = random.randint(0, upper_limit)  # draw the back off value
+    #     # store drawn value for future analyzes
+    #     self.channel.backoffs[back_off][self.channel.n_of_stations] += 1
+    #     return back_off * self.config_nr.observation_slot_duration
+
+    def generate_backoff_slots(self, failed_transmissions_in_row: int)-> int:
+        # BACKOFF SLOTS GENERATION
+        upper_limit = (pow(2, failed_transmissions_in_row) * (self.cw_min + 1) - 1)  # define the upper limit basing on  unsuccessful transmissions in the row
+        upper_limit = upper_limit if upper_limit <= self.cw_max else self.cw_max  # set upper limit to CW Max if is bigger then this parameter
+    
+        return random.randint(0, upper_limit)
+    
+    # Rashed-Step 3.E_1-12-26-2025-end
 
     def sent_failed(self):
         log(self, "There was a collision")

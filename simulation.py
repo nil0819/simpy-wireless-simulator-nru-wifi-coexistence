@@ -42,8 +42,20 @@ def run_simulation(
 ):
     random.seed(seed)
     environment = simpy.Environment()
+    # Rashed-Step 3.F-01-13-2026-start
+    # channel = Channel(
+    #     simpy.PreemptiveResource(environment, capacity=1),
+    #     simpy.Resource(environment, capacity=1),
+    #     number_of_stations,
+    #     number_of_gnb,
+    #     backoffs,
+    #     airtime_data,
+    #     airtime_control,
+    #     airtime_data_NR,
+    #     airtime_control_NR
+    # )
     channel = Channel(
-        simpy.PreemptiveResource(environment, capacity=1),
+        simpy.PriorityResource(environment, capacity=1),  # <-- change this
         simpy.Resource(environment, capacity=1),
         number_of_stations,
         number_of_gnb,
@@ -53,6 +65,8 @@ def run_simulation(
         airtime_data_NR,
         airtime_control_NR
     )
+
+    # Rashed-Step 3.F-01-13-2026-end
 
     
 
@@ -161,8 +175,21 @@ def run_simulation(
     #     # Gnb(environment, "Gnb {}".format(i), channel, config_nr)
     #     Gnb(environment, "Gnb {}".format(i), channel, configNr)
     # Rashed-Step 1.E-12-26-2025-end
-        
-        
+
+    # Rashed-Step 3.F-12-26-2025-start
+    # print("APs: ", [ap.name for ap in wifi_aps])
+    # print("GNBs: ", [g.name for g in gnbs])
+
+    print("WiFi airtime data:", sum(channel.airtime_data.values()))
+    print("WiFi airtime ctrl:", sum(channel.airtime_control.values()))
+    print("NRU airtime data:", sum(channel.airtime_data_NR.values()))
+    print("NRU airtime ctrl:", sum(channel.airtime_control_NR.values()))
+    print("succ WiFi:", channel.succeeded_transmissions, "fail WiFi:", channel.failed_transmissions)
+    print("succ NRU:", channel.succeeded_transmissions_NR, "fail NRU:", channel.failed_transmissions_NR)
+
+
+    # Rashed-Step 3.F-12-26-2025-end   
+
 
     # environment.run(until=simulation_time * 1000000) 10^6 milisekundy
     environment.run(until=simulation_time * 1000000)
@@ -258,9 +285,12 @@ def run_simulation(
     print(
         f" NR succ: {channel.succeeded_transmissions_NR} fail: {channel.failed_transmissions_NR}")
 
-    fairness = (normalized_channel_occupancy_time_all**2) / (2 *
-                                                             (normalized_channel_occupancy_time**2 + normalized_channel_occupancy_time_NR**2))
+    # Rashed-Step 3.F-01-12-2026-start
 
+    #fairness_den = 2 * (normalized_channel_occupancy_time_wifi**2 + normalized_channel_occupancy_time_nru**2)
+
+    fairness = (normalized_channel_occupancy_time_all**2) / (2 * (normalized_channel_occupancy_time**2 + normalized_channel_occupancy_time_NR**2)) if (normalized_channel_occupancy_time or normalized_channel_occupancy_time_NR) else 0.0
+    # Rashed-Step 3.F-01-12-2026-end
     print(f'fairness: {fairness}')
     joint = fairness * normalized_channel_occupancy_time_all
     print(f'joint: {joint}')

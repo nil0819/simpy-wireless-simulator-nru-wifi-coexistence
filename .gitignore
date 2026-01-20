@@ -11,3 +11,7 @@ lool.csv
 
 # OS
 .DS_Store
+
+
+# Test log
+.test/log
