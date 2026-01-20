@@ -1,4 +1,4 @@
-# A Wi-Fi and NR-U Coexistence Channel Access Simulator based on the Python SimPy Library
+# Simpy Enabled Wireless Simulator
 
 ## Intro
 Simulator created for based on the master thesis `Jakub_Cichon_Master_s_Thesis.pdf` by Jakub Cichoń which was based on two existing implementations:
@@ -15,6 +15,9 @@ Simulator created for based on the master thesis `Jakub_Cichon_Master_s_Thesis.p
   - pandas
   - matplotlib
   - scipy
+
+
+  We are targetting to implement real world settings in this simulator in stead of it being a process based simulator. 
 
 ## Structure
 
@@ -142,7 +145,18 @@ fairness: 0.5398053473945499
 joint: 0.4984111300570852
 ```
 
-#### Citation
+#### Current Work Status
+
+
+----> Step 1 — Add topology + distance (positions)
+----> Step 2 — Add path loss + received power (RSSI)
+----> Step 3 — Per-node CCA / ED-based channel sensing
+
+#### Citation1
+
+
+
+
 
 Please consider citing the following works if relevant to your research
 
