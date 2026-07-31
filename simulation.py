@@ -1,7 +1,7 @@
 from common.common import *
 from nru.ue import NrUE
 from wifi.wifi import *
-from nru.nru import * 
+from nru.nru import *
 from channel.channel import *
 from attacker.roguewificad import *
 # from roguewifiselfbackoff import *
@@ -9,6 +9,9 @@ from attacker.roguewificad import *
 # Rashed-Step 1.D_2-12-26-2025-start
 from wifi.sta import *
 # Rashed-Step 1.D_2-12-26-2025-end
+# Rashed-Step 5.A-02-06-2026-start
+from typing import Optional
+# Rashed-Step 5.A-02-06-2026-end
 
 
 # Rashed-Step 1.D_2-12-26-2025-start
@@ -37,8 +40,17 @@ def run_simulation(
         area_w: float = 50.0,
         area_h: float = 50.0,
         wifi_stas_per_ap: int = 1,
-        nr_ues_per_gnb: int = 1
+        nr_ues_per_gnb: int = 1,
         # Rashed-Step 1.D_1-12-26-2025-end
+        # Rashed-Step 5.A-02-06-2026-start
+        # Explicit device placement. Matched by order to AP 1, AP 2, ... /
+        # Gnb 1, Gnb 2, ... ; any AP/gNB beyond len(ap_positions) /
+        # len(gnb_positions) still falls back to rand_pos(area_w, area_h).
+        ap_positions: Optional[List[Pos]] = None,
+        gnb_positions: Optional[List[Pos]] = None,
+        sta_radius: float = 10.0,
+        ue_radius: float = 15.0
+        # Rashed-Step 5.A-02-06-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -95,13 +107,20 @@ def run_simulation(
 
     for i in range(1, number_of_stations + 1):
         ap_name = f"AP {i}"
-        ap_pos = rand_pos(area_w, area_h)
+        # Rashed-Step 5.A-02-06-2026-start
+        if ap_positions is not None and i - 1 < len(ap_positions):
+            ap_pos = ap_positions[i - 1]
+        else:
+            ap_pos = rand_pos(area_w, area_h)
+        # Rashed-Step 5.A-02-06-2026-end
 
         stas_for_ap = []
         for k in range(1, wifi_stas_per_ap + 1):
             sta = WiFiSTA(
                 name=f"STA {i}-{k}",
-                pos=rand_pos_near(ap_pos, radius=10.0),
+                # Rashed-Step 5.A-02-06-2026-start
+                pos=rand_pos_near(ap_pos, radius=sta_radius),
+                # Rashed-Step 5.A-02-06-2026-end
                 ap_name=ap_name
             )
             stas_for_ap.append(sta)
@@ -140,13 +159,20 @@ def run_simulation(
     ues = []
     for i in range(1, number_of_gnb + 1):
         gnb_name = f"Gnb {i}"
-        gnb_pos = rand_pos(area_w, area_h)
+        # Rashed-Step 5.A-02-06-2026-start
+        if gnb_positions is not None and i - 1 < len(gnb_positions):
+            gnb_pos = gnb_positions[i - 1]
+        else:
+            gnb_pos = rand_pos(area_w, area_h)
+        # Rashed-Step 5.A-02-06-2026-end
 
         ues_for_gnb = []
         for k in range(1, nr_ues_per_gnb + 1):
             ue = NrUE(
                 name=f"UE {i}-{k}",
-                pos=rand_pos_near(gnb_pos, radius=15.0),
+                # Rashed-Step 5.A-02-06-2026-start
+                pos=rand_pos_near(gnb_pos, radius=ue_radius),
+                # Rashed-Step 5.A-02-06-2026-end
                 gnb_name=gnb_name
             )
             ues_for_gnb.append(ue)

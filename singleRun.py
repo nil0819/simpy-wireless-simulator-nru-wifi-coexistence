@@ -4,6 +4,29 @@ import sys
 from simulation import *
 
 
+# Rashed-Step 5.A-02-06-2026-start
+def parse_pos_list(raw_values, label: str):
+    """Parse a tuple of 'x,y' strings (from a repeatable click option) into
+    a list of (float, float) tuples. Raises click.BadParameter on malformed
+    input so the CLI fails fast with a clear message instead of a raw
+    ValueError/IndexError deep in simulation.py."""
+    positions = []
+    for raw in raw_values:
+        parts = raw.split(",")
+        if len(parts) != 2:
+            raise click.BadParameter(
+                f"{label} must be given as 'x,y' (got: {raw!r})"
+            )
+        try:
+            x, y = float(parts[0]), float(parts[1])
+        except ValueError:
+            raise click.BadParameter(
+                f"{label} coordinates must be numeric (got: {raw!r})"
+            )
+        positions.append((x, y))
+    return positions
+# Rashed-Step 5.A-02-06-2026-end
+
 
 @click.command()
 @click.option("-r", "--runs", "runs", default=10, help="Number of simulation runs")
@@ -43,6 +66,14 @@ from simulation import *
 @click.option("-nru_obser_slots", "--nru_observation_slot", default=3, help="amount of observation slots for NR_U")
 @click.option("--mcot", default=6, help="Max channel occupancy time for NR-U (ms)")
 @click.option("--rogue","rogue_wifi",default=False,help="Presence of rogue Wi-Fi AP(True/False)")
+# Rashed-Step 5.A-02-06-2026-start
+@click.option("--area-w", "area_w", type=float, default=50.0, help="Deployment area width (m) used for randomly placed devices")
+@click.option("--area-h", "area_h", type=float, default=50.0, help="Deployment area height (m) used for randomly placed devices")
+@click.option("--ap-pos", "ap_pos", type=str, multiple=True, help="Explicit AP position as 'x,y' (repeatable, e.g. --ap-pos 0,0 --ap-pos 50,0). Matched in order to AP 1, AP 2, ...; any AP beyond the number given falls back to a random position within --area-w/--area-h.")
+@click.option("--gnb-pos", "gnb_pos", type=str, multiple=True, help="Explicit gNB position as 'x,y' (repeatable). Matched in order to Gnb 1, Gnb 2, ...; same random fallback as --ap-pos.")
+@click.option("--sta-radius", "sta_radius", type=float, default=10.0, help="Radius (m) around its AP within which an associated Wi-Fi STA is randomly placed")
+@click.option("--ue-radius", "ue_radius", type=float, default=15.0, help="Radius (m) around its gNB within which an associated NR-U UE is randomly placed")
+# Rashed-Step 5.A-02-06-2026-end
 
 def single_run(
         runs: int,
@@ -62,7 +93,15 @@ def single_run(
         min_sync_slot_desync: int,
         nru_observation_slot: int,
         mcot: int,
-        rogue_wifi: bool
+        rogue_wifi: bool,
+        # Rashed-Step 5.A-02-06-2026-start
+        area_w: float,
+        area_h: float,
+        ap_pos: tuple,
+        gnb_pos: tuple,
+        sta_radius: float,
+        ue_radius: float
+        # Rashed-Step 5.A-02-06-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -70,13 +109,24 @@ def single_run(
     airtime_data_NR = {"Gnb {}".format(i): 0 for i in range(1, gnb_number + 1)}
     airtime_control_NR = {"Gnb {}".format(i): 0 for i in range(1, gnb_number + 1)}
 
+    # Rashed-Step 5.A-02-06-2026-start
+    ap_positions = parse_pos_list(ap_pos, "--ap-pos") if ap_pos else None
+    gnb_positions = parse_pos_list(gnb_pos, "--gnb-pos") if gnb_pos else None
+    # Rashed-Step 5.A-02-06-2026-end
+
     for i in range(0, runs):
         curr_seed = seed + i
         print("before simulation")
         run_simulation(ap_number, gnb_number, curr_seed, simulation_time,
                        Config(1472, wifi_cw_min, wifi_cw_max, wifi_r_limit, mcs_value),
                        Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync, min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot),
-                       backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR,rogue_wifi)
+                       backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR, rogue_wifi,
+                       # Rashed-Step 5.A-02-06-2026-start
+                       area_w=area_w, area_h=area_h,
+                       ap_positions=ap_positions, gnb_positions=gnb_positions,
+                       sta_radius=sta_radius, ue_radius=ue_radius
+                       # Rashed-Step 5.A-02-06-2026-end
+                       )
 
 
 
