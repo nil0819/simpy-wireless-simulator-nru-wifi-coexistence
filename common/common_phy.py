@@ -96,3 +96,31 @@ def mcs_sinr_threshold_db(table: Dict[int, float], mcs: int) -> float:
         return table[keys[0]]
     return table[keys[-1]]
 # Rashed-Step 5.D-02-06-2026-end
+
+# Rashed-Step 5.E-02-06-2026-start
+def spectral_overlap_fraction(f1_hz: float, bw1_mhz: float, f2_hz: float, bw2_mhz: float) -> float:
+    """
+    What fraction of channel 1's bandwidth does channel 2 overlap, given
+    each channel's center frequency and bandwidth. Meant to be called as
+    spectral_overlap_fraction(receiver's own f_hz/bandwidth_mhz,
+    interferer's f_hz/bandwidth_mhz) - i.e. "how much of the spectrum the
+    receiver is tuned to is this other signal actually stepping on".
+
+    Returns 1.0 for identical co-channel signals (same f_hz, same
+    bandwidth - the default before Step 5.E, when everyone was hardcoded
+    to 5.18 GHz), 0.0 for channels that don't overlap in frequency at all,
+    and a value in between for partial/adjacent-channel overlap. This is a
+    simplified flat-PSD approximation (real adjacent-channel rejection
+    curves aren't flat), good enough to distinguish "same channel" vs
+    "adjacent channel" vs "different band entirely" without hand-tuning a
+    separate ACR constant.
+    """
+    bw1_hz = max(bw1_mhz, 0.0) * 1e6
+    bw2_hz = max(bw2_mhz, 0.0) * 1e6
+    if bw1_hz <= 0.0:
+        return 0.0
+    lo1, hi1 = f1_hz - bw1_hz / 2.0, f1_hz + bw1_hz / 2.0
+    lo2, hi2 = f2_hz - bw2_hz / 2.0, f2_hz + bw2_hz / 2.0
+    overlap_hz = max(0.0, min(hi1, hi2) - max(lo1, lo2))
+    return min(1.0, overlap_hz / bw1_hz)
+# Rashed-Step 5.E-02-06-2026-end

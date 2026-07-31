@@ -170,7 +170,13 @@ class WiFi:
         dif_remaining = Times.t_difs
 
         while dif_remaining > 0:
-            if self.channel.is_busy(self.pos, self.config.ed_threshold_dbm, exclude_tx_id=self.name):
+            # Rashed-Step 5.E-02-06-2026-start
+            # Sensing is now channel-aware: pass this AP's own f_ghz/
+            # bandwidth_mhz so energy on a non-overlapping channel doesn't
+            # falsely mark the channel busy.
+            if self.channel.is_busy(self.pos, self.config.ed_threshold_dbm, exclude_tx_id=self.name,
+                                     sense_f_hz=self.config.f_ghz, sense_bw_mhz=self.config.bandwidth_mhz):
+            # Rashed-Step 5.E-02-06-2026-end
                 log(self, "Channel busy during DIFS, waiting...")
                 yield self.channel.state_changed
                 continue
@@ -179,7 +185,10 @@ class WiFi:
             dif_remaining -= step
 
         while backoff_slots > 0:
-            if self.channel.is_busy(self.pos, self.config.ed_threshold_dbm, exclude_tx_id = self.name):
+            # Rashed-Step 5.E-02-06-2026-start
+            if self.channel.is_busy(self.pos, self.config.ed_threshold_dbm, exclude_tx_id=self.name,
+                                     sense_f_hz=self.config.f_ghz, sense_bw_mhz=self.config.bandwidth_mhz):
+            # Rashed-Step 5.E-02-06-2026-end
                 log(self, "Channel busy during backoff, waiting...")
                 yield self.channel.state_changed
                 continue

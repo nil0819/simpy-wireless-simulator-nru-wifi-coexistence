@@ -6,7 +6,7 @@ from common.common import *
 from dataclasses import dataclass
 import simpy
 import math
-from common.common_phy import rx_power_dbm, dbm_to_mw, mw_to_dbm, Pos, sample_shadow_db, thermal_noise_dbm
+from common.common_phy import rx_power_dbm, dbm_to_mw, mw_to_dbm, Pos, sample_shadow_db, thermal_noise_dbm, spectral_overlap_fraction
 from typing import Optional, List
 from typing import Any, List, Tuple
 # Rashed-Step 3.B-01-12-2026-end
@@ -162,7 +162,20 @@ class Channel:
     # Rashed-Step 5.B-02-06-2026-end
 
     # Rashed-Step 3.C-01-12-2026-start
-    def sensed_energy_dbm(self, sense_pos: Pos, exclude_tx_id: Optional[str] = None) -> float:
+    # Rashed-Step 5.E-02-06-2026-start
+    # sense_f_hz/sense_bw_mhz are optional and default to None, meaning
+    # "sum every active transmitter's power regardless of frequency" - the
+    # old behavior, kept for backward compatibility with callers that
+    # don't know/care about frequency (the standalone test/*.py files
+    # construct Channel/ActiveTx directly without ever passing these).
+    # When a caller DOES pass its own channel (f_hz + bandwidth_mhz),
+    # each transmitter's contribution is scaled by how much spectral
+    # overlap it actually has with the sensing node's own channel - a
+    # node tuned to a non-overlapping channel shouldn't defer to energy
+    # it can't actually hear.
+    def sensed_energy_dbm(self, sense_pos: Pos, exclude_tx_id: Optional[str] = None,
+                           sense_f_hz: Optional[float] = None, sense_bw_mhz: Optional[float] = None) -> float:
+    # Rashed-Step 5.E-02-06-2026-end
         total_mw = 0.0
         now = self.env.now
 
@@ -174,27 +187,40 @@ class Channel:
         self.active_txs = [t for t in self.active_txs if t.t_end > now]
 
         # Rashed-Step 3.F-01-13-2026-end
-        
+
         for tx in self.active_txs:
              if exclude_tx_id is not None and tx.tx_id == exclude_tx_id:
                   continue
+             # Rashed-Step 5.E-02-06-2026-start
+             if sense_f_hz is not None:
+                 overlap = spectral_overlap_fraction(sense_f_hz, sense_bw_mhz, tx.f_hz, tx.bandwidth_mhz)
+                 if overlap <= 0.0:
+                     continue
+             else:
+                 overlap = 1.0
+             # Rashed-Step 5.E-02-06-2026-end
              d = dist(tx.tx_pos, sense_pos)
              # Rashed-Step 5.B-02-06-2026-start
              shadow = self.shadow_db(tx.tx_id, sense_pos)
              pr = rx_power_dbm(tx.tx_power_dbm, d, tx.f_hz, n = tx.pl_exp, shadow_db=shadow)
              # Rashed-Step 5.B-02-06-2026-end
-             total_mw += dbm_to_mw(pr)
+             # Rashed-Step 5.E-02-06-2026-start
+             total_mw += dbm_to_mw(pr) * overlap
+             # Rashed-Step 5.E-02-06-2026-end
 
         if total_mw == 0.0:
             return -math.inf
-        
-        return mw_to_dbm(total_mw)
-    
 
-    def is_busy(self, sense_pos: Pos, ed_threshold_dbm: float, exclude_tx_id: Optional[str] = None) -> bool:
-        return self.sensed_energy_dbm(sense_pos, exclude_tx_id) >= ed_threshold_dbm
-            
-        
+        return mw_to_dbm(total_mw)
+
+
+    # Rashed-Step 5.E-02-06-2026-start
+    def is_busy(self, sense_pos: Pos, ed_threshold_dbm: float, exclude_tx_id: Optional[str] = None,
+                sense_f_hz: Optional[float] = None, sense_bw_mhz: Optional[float] = None) -> bool:
+        return self.sensed_energy_dbm(sense_pos, exclude_tx_id, sense_f_hz, sense_bw_mhz) >= ed_threshold_dbm
+    # Rashed-Step 5.E-02-06-2026-end
+
+
     # Rashed-Step 3.C-01-12-2026-end
 
 
@@ -231,12 +257,27 @@ class Channel:
         for other in self.active_txs:
             if other.tx_id == target.tx_id:
                 continue
-              
+
             if not (other.tx_start < target.t_end and other.t_end > target.tx_start):
                 continue
-              
+
+            # Rashed-Step 5.E-02-06-2026-start
+            # BUGFIX/upgrade: interference used to be counted at full
+            # strength regardless of frequency - two techs on completely
+            # different, non-overlapping channels would still "interfere"
+            # here just because they were both active_txs. Now scaled by
+            # how much of the *victim's* channel bandwidth the interferer
+            # actually overlaps (1.0 = full co-channel, same as before
+            # Step 5.E when both were hardcoded to 5.18 GHz; 0.0 = fully
+            # separated channels, no RF interference).
+            overlap = spectral_overlap_fraction(
+                target.f_hz, target.bandwidth_mhz, other.f_hz, other.bandwidth_mhz
+            )
+            if overlap <= 0.0:
+                continue
             i_dbm = self._rx_pwr_dbm(other, target.rx_pos)
-            i_mw += dbm_to_mw(i_dbm)
+            i_mw += dbm_to_mw(i_dbm) * overlap
+            # Rashed-Step 5.E-02-06-2026-end
 
         n_mw = dbm_to_mw(noise_dbm)
 

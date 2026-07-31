@@ -197,7 +197,10 @@ class Gnb:
         remaining = backoff_time
 
         while remaining > 0:
-            if self.channel.is_busy(self.pos, self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name):
+            # Rashed-Step 5.E-02-06-2026-start
+            if self.channel.is_busy(self.pos, self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name,
+                                     sense_f_hz=self.config_nr.f_ghz, sense_bw_mhz=self.config_nr.bandwidth_mhz):
+            # Rashed-Step 5.E-02-06-2026-end
                 log(self, f"Channel busy during backoff, pausing backoff with {remaining} us remaining")
                 yield self.channel.state_changed
                 continue
@@ -222,7 +225,10 @@ class Gnb:
         log(self, f"Starting gap period of : {gap_remaining} us")
 
         while gap_remaining > 0:
-            if self.channel.is_busy(self.pos, self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name):
+            # Rashed-Step 5.E-02-06-2026-start
+            if self.channel.is_busy(self.pos, self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name,
+                                     sense_f_hz=self.config_nr.f_ghz, sense_bw_mhz=self.config_nr.bandwidth_mhz):
+            # Rashed-Step 5.E-02-06-2026-end
                 log(self, f"Channel busy during gap, pausing gap with {gap_remaining} us remaining")
                 yield self.channel.state_changed
                 continue
