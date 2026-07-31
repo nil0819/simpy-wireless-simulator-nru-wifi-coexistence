@@ -40,6 +40,14 @@ class Config_NR:
     nru_sinr_thr_db: float = 10.0 #starting with 10 dB
     # Rashed-Step 4.D_1-01-28-2026-end
 
+    # Rashed-Step 5.C-02-06-2026-start
+    # See wifi.Config's matching fields - same idea, drives the SINR noise
+    # floor via common_phy.thermal_noise_dbm() instead of a hardcoded
+    # -94.0 dBm constant. Defaults land back at ~-94 dBm.
+    bandwidth_mhz: float = 20.0
+    noise_figure_db: float = 7.0
+    # Rashed-Step 5.C-02-06-2026-end
+
 
 
 @dataclass()
@@ -386,7 +394,11 @@ class Gnb:
                 f_hz=self.config_nr.f_ghz,
                 pl_exp=self.config_nr.pl_exp,
                 t_end=tx_start + tx_dur,
-                tech="NRU"
+                tech="NRU",
+                # Rashed-Step 5.C-02-06-2026-start
+                bandwidth_mhz=self.config_nr.bandwidth_mhz,
+                noise_figure_db=self.config_nr.noise_figure_db
+                # Rashed-Step 5.C-02-06-2026-end
             )
             # Rashed-Step 4.B_4-01-20-2026-start
             #print(self.env.now, self.name, "TX->RX d=", dist(self.pos, rx_pos))

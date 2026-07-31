@@ -61,3 +61,18 @@ def sample_shadow_db(sigma_db: float) -> float:
         return 0.0
     return random.gauss(0.0, sigma_db)
 # Rashed-Step 5.B-02-06-2026-end
+
+# Rashed-Step 5.C-02-06-2026-start
+def thermal_noise_dbm(bandwidth_mhz: float, noise_figure_db: float) -> float:
+    """
+    Receiver thermal noise floor:
+      N(dBm) = -174 dBm/Hz (thermal noise density at ~290K) + 10*log10(BW_Hz) + NF(dB)
+    Replaces the old hardcoded -94.0 dBm constant in channel.sinr_db().
+    At the new defaults (20 MHz, 7 dB NF) this comes out to ~-94.0 dBm too,
+    so nothing changes for anyone who doesn't touch bandwidth/NF - it's now
+    just derived instead of a magic number, and moves with bandwidth/NF if
+    you configure them differently.
+    """
+    bandwidth_hz = max(bandwidth_mhz, 1e-6) * 1e6
+    return -174.0 + 10.0 * math.log10(bandwidth_hz) + noise_figure_db
+# Rashed-Step 5.C-02-06-2026-end

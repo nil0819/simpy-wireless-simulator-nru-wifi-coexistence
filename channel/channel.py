@@ -6,7 +6,7 @@ from common.common import *
 from dataclasses import dataclass
 import simpy
 import math
-from common.common_phy import rx_power_dbm, dbm_to_mw, mw_to_dbm, Pos, sample_shadow_db
+from common.common_phy import rx_power_dbm, dbm_to_mw, mw_to_dbm, Pos, sample_shadow_db, thermal_noise_dbm
 from typing import Optional, List
 from typing import Any, List, Tuple
 # Rashed-Step 3.B-01-12-2026-end
@@ -28,6 +28,15 @@ class ActiveTx:
     pl_exp: float
     t_end: int
     tech: str  # "WiFi" or "NRU"
+    # Rashed-Step 5.C-02-06-2026-start
+    # Receiver-side noise params for this link, used to derive the SINR
+    # noise floor (see common_phy.thermal_noise_dbm). Defaults (20 MHz,
+    # 7 dB NF -> ~-94 dBm) match the old hardcoded constant, so any code
+    # constructing ActiveTx without passing these (e.g. the standalone
+    # test/*.py files) is unaffected.
+    bandwidth_mhz: float = 20.0
+    noise_figure_db: float = 7.0
+    # Rashed-Step 5.C-02-06-2026-end
 # Rashed-Step 3.B-01-12-2026-end
 
 
@@ -199,11 +208,21 @@ class Channel:
          return rx_power_dbm(tx.tx_power_dbm, d, tx.f_hz, n=tx.pl_exp, shadow_db=shadow)
          # Rashed-Step 5.B-02-06-2026-end
     
-    def sinr_db(self, target:ActiveTx, noise_dbm: float = -94.0) -> float:
+    # Rashed-Step 5.C-02-06-2026-start
+    # BUGFIX/upgrade: noise_dbm used to default to a hardcoded -94.0 dBm
+    # constant regardless of bandwidth or receiver noise figure. Now
+    # defaults to None, meaning "derive it from target's own
+    # bandwidth_mhz/noise_figure_db via thermal_noise_dbm()" - callers can
+    # still pass an explicit noise_dbm to override (e.g. for tests that
+    # want a fixed noise value).
+    def sinr_db(self, target: ActiveTx, noise_dbm: Optional[float] = None) -> float:
         """
         SINR at target.rx_pos considering only transmissions that overlap in time
         with [target.tx_start, target.t_end].
         """
+        if noise_dbm is None:
+            noise_dbm = thermal_noise_dbm(target.bandwidth_mhz, target.noise_figure_db)
+        # Rashed-Step 5.C-02-06-2026-end
         s_dbm = self._rx_pwr_dbm(target, target.rx_pos)
         s_mw = dbm_to_mw(s_dbm)
 

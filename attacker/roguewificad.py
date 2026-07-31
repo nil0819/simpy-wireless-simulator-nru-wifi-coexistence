@@ -46,6 +46,12 @@ class ConfigRoguesWiFi:
     attack_slot_us: int = 500  # attack cadence (~AIFS-scale, CAD paper Fig.1)
     # Rashed-Step pre_5.D-02-06-2026-end
 
+    # Rashed-Step 5.C-02-06-2026-start
+    # See wifi.Config's matching fields.
+    bandwidth_mhz: float = 20.0
+    noise_figure_db: float = 7.0
+    # Rashed-Step 5.C-02-06-2026-end
+
 
 
 class RogueWiFiCAD:
@@ -133,7 +139,11 @@ class RogueWiFiCAD:
             f_hz=self.config.f_ghz,
             pl_exp=self.config.pl_exp,
             t_end=tx_start + self.frame_to_send.frame_time,
-            tech="WiFi"
+            tech="WiFi",
+            # Rashed-Step 5.C-02-06-2026-start
+            bandwidth_mhz=self.config.bandwidth_mhz,
+            noise_figure_db=self.config.noise_figure_db
+            # Rashed-Step 5.C-02-06-2026-end
         )
         self.channel.register_tx(tx)
 

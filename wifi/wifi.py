@@ -38,6 +38,16 @@ class Config:
     wifi_sinr_thr_db = 10.0 #starting with 10 dB
     # Rashed-Step 4.D_1-01-28-2026-end
 
+    # Rashed-Step 5.C-02-06-2026-start
+    # Receiver-side noise params, used to derive the SINR noise floor
+    # (see common_phy.thermal_noise_dbm) instead of the old hardcoded
+    # -94.0 dBm constant. 20 MHz matches the legacy-OFDM rate table in
+    # Times.py; 7 dB NF is a typical Wi-Fi NIC value. Together they land
+    # right back at ~-94 dBm by default.
+    bandwidth_mhz: float = 20.0
+    noise_figure_db: float = 7.0
+    # Rashed-Step 5.C-02-06-2026-end
+
 
 
 class WiFi:
@@ -297,7 +307,11 @@ class WiFi:
                 f_hz=self.config.f_ghz,
                 pl_exp=self.config.pl_exp,
                 t_end=tx_start + self.frame_to_send.frame_time,
-                tech="WiFi"
+                tech="WiFi",
+                # Rashed-Step 5.C-02-06-2026-start
+                bandwidth_mhz=self.config.bandwidth_mhz,
+                noise_figure_db=self.config.noise_figure_db
+                # Rashed-Step 5.C-02-06-2026-end
             )
             # Rashed-Step 4.B_4-01-20-2026-start
             #print(self.env.now, self.name, "TX->RX d=", dist(self.pos, rx_pos))

@@ -77,6 +77,12 @@ def parse_pos_list(raw_values, label: str):
 # Rashed-Step 5.B-02-06-2026-start
 @click.option("--shadowing-sigma-db", "shadowing_sigma_db", type=float, default=0.0, help="Log-normal shadow fading std dev in dB, applied on top of the deterministic path loss (0 = disabled/deterministic, matches pre-Step-5.B behavior; typical indoor value ~4-8)")
 # Rashed-Step 5.B-02-06-2026-end
+# Rashed-Step 5.C-02-06-2026-start
+@click.option("--wifi-bandwidth-mhz", "wifi_bandwidth_mhz", type=float, default=20.0, help="Wi-Fi channel bandwidth (MHz), used to derive the SINR noise floor")
+@click.option("--wifi-noise-figure-db", "wifi_noise_figure_db", type=float, default=7.0, help="Wi-Fi receiver noise figure (dB), used to derive the SINR noise floor")
+@click.option("--nru-bandwidth-mhz", "nru_bandwidth_mhz", type=float, default=20.0, help="NR-U channel bandwidth (MHz), used to derive the SINR noise floor")
+@click.option("--nru-noise-figure-db", "nru_noise_figure_db", type=float, default=7.0, help="NR-U receiver noise figure (dB), used to derive the SINR noise floor")
+# Rashed-Step 5.C-02-06-2026-end
 
 def single_run(
         runs: int,
@@ -106,8 +112,14 @@ def single_run(
         ue_radius: float,
         # Rashed-Step 5.A-02-06-2026-end
         # Rashed-Step 5.B-02-06-2026-start
-        shadowing_sigma_db: float
+        shadowing_sigma_db: float,
         # Rashed-Step 5.B-02-06-2026-end
+        # Rashed-Step 5.C-02-06-2026-start
+        wifi_bandwidth_mhz: float,
+        wifi_noise_figure_db: float,
+        nru_bandwidth_mhz: float,
+        nru_noise_figure_db: float
+        # Rashed-Step 5.C-02-06-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -124,8 +136,12 @@ def single_run(
         curr_seed = seed + i
         print("before simulation")
         run_simulation(ap_number, gnb_number, curr_seed, simulation_time,
-                       Config(1472, wifi_cw_min, wifi_cw_max, wifi_r_limit, mcs_value),
-                       Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync, min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot),
+                       # Rashed-Step 5.C-02-06-2026-start
+                       Config(1472, wifi_cw_min, wifi_cw_max, wifi_r_limit, mcs_value,
+                              bandwidth_mhz=wifi_bandwidth_mhz, noise_figure_db=wifi_noise_figure_db),
+                       Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync, min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot,
+                                 bandwidth_mhz=nru_bandwidth_mhz, noise_figure_db=nru_noise_figure_db),
+                       # Rashed-Step 5.C-02-06-2026-end
                        backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR, rogue_wifi,
                        # Rashed-Step 5.A-02-06-2026-start
                        area_w=area_w, area_h=area_h,
