@@ -505,8 +505,14 @@ class Gnb:
                 else:
                     self.sent_failed()
                 # Rashed-Step 4.D_3-01-29-2026-start
-            finally:
                 # Rashed-Step 4.C_2-01-21-2026-start
+                # Yield one extra zero-duration tick before unregistering,
+                # so another transmission ending at this exact same env.now
+                # still sees this one in channel.active_txs while computing
+                # its own SINR (avoids an artificial tie-break bias from
+                # unregistering "too early" relative to a same-tick peer -
+                # see channel.sinr_db()/sensed_energy_dbm(), both of which
+                # only count what's currently in active_txs).
                 yield self.env.timeout(0)
                 # Rashed-Step 4.C_2-01-21-2026-end
                 # Rashed-Step 5.1-02-06-2026-start
@@ -515,6 +521,26 @@ class Gnb:
                 # airtime_data_NR += line was removed.
                 self.channel.unregister_tx(active, success=was_sent)
                 # Rashed-Step 5.1-02-06-2026-end
+            except BaseException:
+                # Rashed-Step 5.I-02-06-2026-start
+                # BUGFIX: this used to be `finally: yield ...; unregister_tx
+                # (...)`, which ran on EVERY exit path including the
+                # generator being closed via GeneratorExit at simulation
+                # shutdown (env.run(until=...) returning while this gNB was
+                # still mid-transmission - a near-certain occurrence at the
+                # end of any run). Yielding again while a generator is being
+                # closed is invalid and raised "RuntimeError: generator
+                # ignored GeneratorExit" (printed by the interpreter as
+                # "Exception ignored in: ..." since it happens during
+                # garbage collection with no caller to propagate to -
+                # harmless to already-computed results, but noisy on every
+                # single run). Fixed the same way as wifi.WiFi.send_frame():
+                # move the yield+unregister into the normal (non-exception)
+                # tail of the try, and handle GeneratorExit (or any other
+                # exception) here with purely SYNCHRONOUS cleanup instead.
+                self.channel.unregister_tx(active, success=was_sent)
+                raise
+                # Rashed-Step 5.I-02-06-2026-end
 
         # after leaving the 'with', resource is released automatically
 

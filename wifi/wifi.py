@@ -400,8 +400,14 @@ class WiFi:
                 else:
                     self.sent_failed()
                 # Rashed-Step 4.D_2-01-28-2026-end
-            finally:
                 # Rashed-Step 4.C_2-01-21-2026-start
+                # Yield one extra zero-duration tick before unregistering,
+                # so another transmission ending at this exact same env.now
+                # still sees this one in channel.active_txs while computing
+                # its own SINR (avoids an artificial tie-break bias from
+                # unregistering "too early" relative to a same-tick peer -
+                # see channel.sinr_db()/sensed_energy_dbm(), both of which
+                # only count what's currently in active_txs).
                 yield self.env.timeout(0)
                 # Rashed-Step 4.C_2-01-21-2026-end
                 # Rashed-Step 5.1-02-06-2026-start
@@ -410,6 +416,30 @@ class WiFi:
                 # unregister_tx() is now the only place that does.
                 self.channel.unregister_tx(tx, success=was_sent)
                 # Rashed-Step 5.1-02-06-2026-end
+            except BaseException:
+                # Rashed-Step 5.I-02-06-2026-start
+                # BUGFIX: this used to be `finally: yield ...; unregister_tx
+                # (...)`, which ran on EVERY exit path including the
+                # generator being closed via GeneratorExit at simulation
+                # shutdown (env.run(until=...) returning while this AP was
+                # still mid-transmission - a near-certain occurrence at the
+                # end of any run). Yielding again while a generator is being
+                # closed is invalid and raised "RuntimeError: generator
+                # ignored GeneratorExit" (printed by the interpreter as
+                # "Exception ignored in: ..." since it happens during
+                # garbage collection with no caller to propagate to -
+                # harmless to already-computed results, but noisy on every
+                # single run). Fixed by moving the yield+unregister above
+                # into the normal (non-exception) tail of the try block, and
+                # handling GeneratorExit (or any other exception) here with
+                # a purely SYNCHRONOUS cleanup instead - was_sent is still
+                # False here unless the try body got far enough to decide
+                # otherwise, matching the original finally's intent of
+                # "always unregister on the way out", just without the
+                # illegal re-yield.
+                self.channel.unregister_tx(tx, success=was_sent)
+                raise
+                # Rashed-Step 5.I-02-06-2026-end
 
             if was_sent:
                 self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
