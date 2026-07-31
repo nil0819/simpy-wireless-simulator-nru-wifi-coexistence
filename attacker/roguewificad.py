@@ -149,7 +149,9 @@ class RogueWiFiCAD:
                 self.sent_failed()
         finally:
             yield self.env.timeout(0)
-            self.channel.unregister_tx(tx)
+            # Rashed-Step 5.1-02-06-2026-start
+            self.channel.unregister_tx(tx, success=was_sent)
+            # Rashed-Step 5.1-02-06-2026-end
 
         return was_sent
     # Rashed-Step pre_5.D-02-06-2026-end
@@ -262,5 +264,10 @@ class RogueWiFiCAD:
         self.succeeded_transmissions += 1
         self.failed_transmissions_in_row = 0
         self.channel.bytes_sent += self.frame_to_send.data_size
-        self.channel.airtime_data[self.name] += self.frame_to_send.frame_time
+        # Rashed-Step 5.1-02-06-2026-start
+        # BUGFIX: removed a duplicate
+        # self.channel.airtime_data[self.name] += self.frame_to_send.frame_time
+        # here - double-counted against channel.unregister_tx(tx,
+        # success=...) in send_frame(), same bug as wifi.py/nru.py.
+        # Rashed-Step 5.1-02-06-2026-end
         return True

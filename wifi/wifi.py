@@ -304,6 +304,9 @@ class WiFi:
             # Rashed-Step 4.B_4-01-20-2026-end
             self.channel.register_tx(tx)
 
+            # Rashed-Step 5.1-02-06-2026-start
+            was_sent = False
+            # Rashed-Step 5.1-02-06-2026-end
             try:
                 yield self.env.timeout(self.frame_to_send.frame_time)
                 # Rashed-Step 4.C_2-01-21-2026-start
@@ -326,7 +329,12 @@ class WiFi:
                 # Rashed-Step 4.C_2-01-21-2026-start
                 yield self.env.timeout(0)
                 # Rashed-Step 4.C_2-01-21-2026-end
-                self.channel.unregister_tx(tx)
+                # Rashed-Step 5.1-02-06-2026-start
+                # BUGFIX: pass success so airtime isn't recorded twice -
+                # sent_completed() below no longer touches airtime_data,
+                # unregister_tx() is now the only place that does.
+                self.channel.unregister_tx(tx, success=was_sent)
+                # Rashed-Step 5.1-02-06-2026-end
 
             if was_sent:
                 self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
@@ -449,6 +457,13 @@ class WiFi:
         self.succeeded_transmissions += 1
         self.failed_transmissions_in_row = 0
         self.channel.bytes_sent += self.frame_to_send.data_size
-        self.channel.airtime_data[self.name] += self.frame_to_send.frame_time
+        # Rashed-Step 5.1-02-06-2026-start
+        # BUGFIX: this used to also do
+        # self.channel.airtime_data[self.name] += self.frame_to_send.frame_time
+        # here, double-counting against channel.unregister_tx(tx,
+        # success=...) in send_frame()'s finally block, which now records
+        # airtime_data on success. Removed - unregister_tx is the single
+        # source of truth.
+        # Rashed-Step 5.1-02-06-2026-end
         return True
     

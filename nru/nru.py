@@ -393,6 +393,9 @@ class Gnb:
             # Rashed-Step 4.B_4-01-20-2026-end
             self.channel.register_tx(active)
 
+            # Rashed-Step 5.1-02-06-2026-start
+            was_sent = False
+            # Rashed-Step 5.1-02-06-2026-end
             try:
                 yield self.env.timeout(tx_dur)
                 # Rashed-Step 4.C_2-01-21-2026-start
@@ -413,13 +416,26 @@ class Gnb:
                 # Rashed-Step 4.C_2-01-21-2026-start
                 yield self.env.timeout(0)
                 # Rashed-Step 4.C_2-01-21-2026-end
-                self.channel.unregister_tx(active)
+                # Rashed-Step 5.1-02-06-2026-start
+                # BUGFIX: pass success so airtime isn't recorded twice - see
+                # matching note below where the old manual
+                # airtime_data_NR += line was removed.
+                self.channel.unregister_tx(active, success=was_sent)
+                # Rashed-Step 5.1-02-06-2026-end
 
         # after leaving the 'with', resource is released automatically
 
         if was_sent:
             self.channel.airtime_control_NR[self.name] += self.transmission_to_send.rs_time
-            self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
+            # Rashed-Step 5.1-02-06-2026-start
+            # BUGFIX: this used to also do
+            # self.channel.airtime_data_NR[self.name] += self.transmission_to_send.airtime
+            # here, double-counting against channel.unregister_tx(active,
+            # success=...) above, which now records airtime_data_NR on
+            # success. Removed - unregister_tx is the single source of
+            # truth. airtime_control_NR (RS time) is untouched since it
+            # was never duplicated.
+            # Rashed-Step 5.1-02-06-2026-end
             return True
         else:
             return False

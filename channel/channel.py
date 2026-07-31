@@ -100,17 +100,31 @@ class Channel:
          self._pulse_state_changed()
 
     # Rashed-Step 3.F-01-13-2026-start
-    def unregister_tx(self, tx: ActiveTx):
+    # Rashed-Step 5.1-02-06-2026-start
+    # BUGFIX: this was one of TWO places adding to airtime_data/
+    # airtime_data_NR on every successful transmission - wifi.py's
+    # sent_completed(), nru.py's send_transmission() post-block, and
+    # attacker/roguewificad.py's sent_completed() each did it a second
+    # time (leftover from before this method existed), so every success
+    # was counted twice and occupancy/efficiency were ~2x inflated (could
+    # even exceed 1.0 for a single node, which is physically impossible).
+    # This is now the single source of truth: success is passed in and
+    # airtime is only recorded when the transmission actually succeeded.
+    def unregister_tx(self, tx: ActiveTx, success: bool = True):
+    # Rashed-Step 5.1-02-06-2026-end
          if tx in self.active_txs:
               self.active_txs.remove(tx)
 
               dur = max(0, tx.t_end - tx.tx_start)
 
-              if tx.tech == "WiFi":
-                   self.airtime_data[tx.tx_id] = self.airtime_data.get(tx.tx_id, 0) + dur
+              # Rashed-Step 5.1-02-06-2026-start
+              if success:
+                  if tx.tech == "WiFi":
+                       self.airtime_data[tx.tx_id] = self.airtime_data.get(tx.tx_id, 0) + dur
 
-              elif tx.tech == "NRU":
-                    self.airtime_data_NR[tx.tx_id] = self.airtime_data_NR.get(tx.tx_id, 0) + dur
+                  elif tx.tech == "NRU":
+                        self.airtime_data_NR[tx.tx_id] = self.airtime_data_NR.get(tx.tx_id, 0) + dur
+              # Rashed-Step 5.1-02-06-2026-end
               self._pulse_state_changed()
         #  if tx in self.active_txs:
         #      self.active_txs.remove(tx)
