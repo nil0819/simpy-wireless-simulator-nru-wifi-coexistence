@@ -1,4 +1,4 @@
-from torch import res
+
 from common.common import *
 from Times import *
 from common.common import Pos
@@ -33,6 +33,10 @@ class Config:
     # Rashed-Step 3.A-01-12-2026-start
     ed_threshold_dbm: float = -62.0   # energy detect threshold 
     # Rashed-Step 3.A-01-12-2026-end
+
+    # Rashed-Step 4.D_1-01-28-2026-start
+    wifi_sinr_thr_db = 10.0 #starting with 10 dB
+    # Rashed-Step 4.D_1-01-28-2026-end
 
 
 
@@ -72,6 +76,11 @@ class WiFi:
         self.pos = pos
         self.sta_list = sta_list
         # Rashed-Step 1.C_1-01-12-2026-end
+
+
+        # Rashed-Step 4.C_2-01-21-2026-start
+        self.sinr_print_ctr = 0
+        # Rashed-Step 4.C_2-01-21-2026-end
 
     def start(self):
         # Rashed-Step 3.F-12-26-2025-start
@@ -257,19 +266,32 @@ class WiFi:
     #         log(self, "waiting ack timeout slave")
     #         yield self.env.timeout(Times.ack_timeout)  # simulate ack timeout after failed transmission
     #     return was_sent
+
+
     def send_frame(self):
+        # Rashed-Step 4.B_2-01-20-2026-start
+        rx_pos = self.sta_list[0].pos if self.sta_list else self.pos
+        # Rashed-Step 4.B_2-01-20-2026-end
+
     # ONE request only
         with self.channel.tx_queue.request(priority=(big_num - self.frame_to_send.frame_time)) as req:
             yield req
 
             # optional: keep tx_lock if you want exclusive "PHY tx"
-            with self.channel.tx_lock.request() as lock:
-                yield lock
-
+            # Rashed-Step 4.A-01-20-2026-start
+            # with self.channel.tx_lock.request() as lock:
+            #     yield lock
+            # Rashed-Step 4.A-01-20-2026-end
+            # Rashed-Step 4.D_2-01-28-2026-start
+            log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
+            # Rashed-Step 4.D_2-01-28-2026-end
             tx_start = self.env.now
             tx = ActiveTx(
                 tx_id=self.name,
                 tx_pos=self.pos,
+                # Rashed-Step 4.B_2-01-20-2026-start
+                rx_pos=rx_pos,
+                # Rashed-Step 4.B_2-01-20-2026-end
                 tx_start=tx_start,
                 tx_power_dbm=self.config.tx_power_dbm,
                 f_hz=self.config.f_ghz,
@@ -277,12 +299,33 @@ class WiFi:
                 t_end=tx_start + self.frame_to_send.frame_time,
                 tech="WiFi"
             )
+            # Rashed-Step 4.B_4-01-20-2026-start
+            #print(self.env.now, self.name, "TX->RX d=", dist(self.pos, rx_pos))
+            # Rashed-Step 4.B_4-01-20-2026-end
             self.channel.register_tx(tx)
 
             try:
                 yield self.env.timeout(self.frame_to_send.frame_time)
-                was_sent = self.check_collision()
+                # Rashed-Step 4.C_2-01-21-2026-start
+                #self.sinr_print_ctr += 1
+                # if self.sinr_print_ctr % 50 == 0:
+                #     print(self.env.now, self.name, "WiFi SINR(dB) =", self.channel.sinr_db(tx))
+                # Rashed-Step 4.C_2-01-21-2026-end
+                # Rashed-Step 4.D_2-01-28-2026-start
+                sinr = self.channel.sinr_db(tx)
+                log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB")
+                #was_sent = self.check_collision()
+                was_sent = (sinr >= self.config.wifi_sinr_thr_db)
+
+                if was_sent:
+                    self.sent_completed()
+                else:
+                    self.sent_failed()
+                # Rashed-Step 4.D_2-01-28-2026-end
             finally:
+                # Rashed-Step 4.C_2-01-21-2026-start
+                yield self.env.timeout(0)
+                # Rashed-Step 4.C_2-01-21-2026-end
                 self.channel.unregister_tx(tx)
 
             if was_sent:
@@ -348,8 +391,13 @@ class WiFi:
     # Rashed-Step 3.D-12-26-2025-end
 
     def generate_new_frame(self):
-        # frame_length = self.times.get_ppdu_frame_time()
-        frame_length = 5400
+        # Rashed-Step pre_5.C-02-06-2026-start
+        # BUGFIX: frame duration was hardcoded to 5400us, so config.mcs had
+        # zero effect on airtime or on the SINR window used for capture.
+        # Times.get_ppdu_frame_time() already derives duration from
+        # payload size + MCS - re-enabled it.
+        frame_length = self.times.get_ppdu_frame_time()
+        # Rashed-Step pre_5.C-02-06-2026-end
 
         # Rashed-Step 2.D_1-01-08-2026-start
 

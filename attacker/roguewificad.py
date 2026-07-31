@@ -3,7 +3,27 @@
 
 from common.common import *
 from Times import *
-from channel import *
+from common.common import Pos
+
+# Rashed-Step pre_5.D-02-06-2026-start
+# BUGFIX: this class was never actually wired into simulation.py's topology
+# builder (--rogue True printed "Rogue WiFi" and built an unused Config
+# object, but no RogueWiFiCAD was ever instantiated), and it predates
+# Step 1-4: no self.pos, no PHY fields (tx_power_dbm/f_ghz/pl_exp), and its
+# channel sensing + collision logic still used the retired
+# channel.tx_lock / channel.tx_list model instead of the ED-sensing
+# (channel.is_busy) + SINR-gated (channel.register_tx/sinr_db) pipeline
+# WiFi/NR-U now use. This pass: (1) gives it position + PHY config so it can
+# register a real ActiveTx and be sensed/interfered with like everyone else,
+# (2) reconnects it in simulation.py so --rogue True actually spawns it,
+# (3) ports its channel-busy check and success/failure decision onto the
+# same primitives wifi.py uses. The attack TIMING model itself (observe,
+# then fire near a slot boundary at attack_slot_us cadence, matching the
+# CAD-attack paper's mini-slot targeting) is preserved, not redesigned -
+# that is research-sensitive and deserves its own pass with your input.
+from common.common_phy import dist, rx_power_dbm
+from channel.channel import ActiveTx
+# Rashed-Step pre_5.D-02-06-2026-end
 
 
 
@@ -16,6 +36,16 @@ class ConfigRoguesWiFi:
     r_limit: int = 7
     mcs: int = 7
 
+    # Rashed-Step pre_5.D-02-06-2026-start
+    # PHY params mirroring wifi.Config - previously missing entirely.
+    tx_power_dbm: float = 20.0
+    f_ghz: float = 5.18e9
+    pl_exp: float = 3.0        # indoor-ish
+    ed_threshold_dbm: float = -62.0
+    attacker_sinr_thr_db: float = 10.0
+    attack_slot_us: int = 500  # attack cadence (~AIFS-scale, CAD paper Fig.1)
+    # Rashed-Step pre_5.D-02-06-2026-end
+
 
 
 class RogueWiFiCAD:
@@ -24,6 +54,9 @@ class RogueWiFiCAD:
             env: simpy.Environment,
             name: str,
             channel: dataclass,
+            # Rashed-Step pre_5.D-02-06-2026-start
+            pos: Pos,
+            # Rashed-Step pre_5.D-02-06-2026-end
             config: ConfigRoguesWiFi = ConfigRoguesWiFi(),
     ):
         self.config = config
@@ -46,304 +79,151 @@ class RogueWiFiCAD:
         self.back_off_time = 0
         self.start = 0
 
-        self.next_slot=0
-
-        self.is_observation_done = False
-
-        self.attack_frequency = 10
-
-        self.observe_time = 70000
-
-        self.is_waiting_to_send_dummy_frame = False
-
-        self.waiting_time = 0
+        # Rashed-Step pre_5.D-02-06-2026-start
+        self.pos = pos
+        self.next_slot = 0
+        # Rashed-Step pre_5.D-02-06-2026-end
 
     def start(self):
+        # Rashed-Step pre_5.D-02-06-2026-start
         while True:
             self.frame_to_send = self.generate_new_frame()
-            was_sent = False
+            yield self.env.process(self.wait_for_slot_boundary())
+            yield self.env.process(self.send_frame())
+        # Rashed-Step pre_5.D-02-06-2026-end
 
-            while not self.is_observation_done:
-                print("observing is going on")
-                self.process = self.env.process(self.observe_transmission())
-                yield self.process
-                print("next slot",self.next_slot)
-                self.is_observation_done = True
-            
-            while not was_sent:
+    # Rashed-Step pre_5.D-02-06-2026-start
+    def wait_for_slot_boundary(self):
+        """
+        Replaces the old observe_transmission()/tx_lock warm-up loop.
+        Senses energy at the attacker's own position with the same ED
+        primitive WiFi/NR-U use (channel.is_busy), waits for it to go idle,
+        then aligns to the periodic attack_slot_us cadence used to target
+        mini-slot boundaries per the CAD attack model.
+        """
+        while self.channel.is_busy(self.pos, self.config.ed_threshold_dbm, exclude_tx_id=self.name):
+            log(self, "Attacker sensing busy channel, waiting...")
+            yield self.channel.state_changed
 
-                with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
-                    yield req
-                    #yield self.env.timeout(10)
-                    #self.next_slot = self.env.now+500
-                    #print("Next slot after busy channel",self.next_slot)
-                
-                    print("Channel not busy",self.env.now)
-                    self.next_slot = self.env.now+500
-                    #yield self.env.timeout(10)
-                    
-                    
-                    
+        if self.next_slot <= self.env.now:
+            self.next_slot = self.env.now + self.config.attack_slot_us
 
-
-                
-                
-                waiting_time = self.next_slot-self.env.now-10
-                print(self.waiting_time,"Waiting time")
-                # print(self.env.now,"Now")
-                # print(self.next_slot,"Next Slot")
-                        
-                yield self.env.process(self.wait_to_transmit(waiting_time))
-
-                yield self.env.process(self.send_frame())
-                was_sent = True
-                print("Transmission finished",self.env.now)
-                self.next_slot += 500
-                
-
-
-
-
-    def wait_to_transmit(self,waiting_time):
-        print("Rogue AP is waiting now",self.env.now)
-        yield self.env.timeout(self.waiting_time)
-        print("completed waiting",self.env.now)
-
-    def observe_transmission(self):
-
-        #print("Observing transmission")
-        observer_time=20000
-        
-
-        # while self.channel 
-
-        while self.env.now < observer_time+1000:
-            try:
-                
-                with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
-                    yield req
-                # self.back_off_time += Times.t_difs  # add DIFS time
-                # log(self, f"Starting to wait backoff (with DIFS): ({self.back_off_time})u...")
-                self.first_interrupt = True
-                self.start = self.env.now  # store the current simulation time
-                self.channel.back_off_list.append(self)  # join the list off stations which are waiting Back Offs
-
-
-                yield self.env.timeout(observer_time)  # join the environment action queue
-
-                log(self, f"Observation waited, sending frame...")
-                #self.back_off_time = -1  # leave the loop
-
-                self.channel.back_off_list.remove(self)  # leave the waiting list as Backoff was waited successfully
-
-            except simpy.Interrupt:  # handle the interruptions from transmitting stations
-
-                print("Observing transmission and slot counting")
-                if self.first_interrupt and self.start is not None:
-                    #tak jest po mojemu:
-                    
-                    current_time = self.env.now
-                    print(current_time)
-                    self.next_slot = current_time+500
-                    self.waiting_time = self.next_slot-current_time-20
-                    print(self.next_slot)
-                    print("waiting time",self.waiting_time)
-
-
-    def send_dummy_frame(self):
-
-        # if self.channel.n_of_eNB > 0:
-        #     print("GNB is transmitting")
-        #     self.env.timeout(10000)
-        #     return True
-
-        self.channel.tx_list.append(self)  # add station to currently transmitting list
-        res = self.channel.tx_queue.request(
-            priority=(big_num - self.frame_to_send.frame_time))  # create request basing on this station frame length
-        
-        if self.channel.n_of_eNB>0:
-            print("GNB is transmitting")
-            yield self.env.timeout(10000)
-            return True
-        else:
-            print("GNB is not transmitting")
-            yield self.env.timeout(10000)
-            return True
-
-        
-        #try:
-
-        
-
-        # self.channel.tx_list.append(self)  # add station to currently transmitting list
-        # res = self.channel.tx_queue.request(
-        #     priority=(big_num - self.frame_to_send.frame_time))  # create request basing on this station frame length
-
-        # try:
-        #     result = yield res | self.env.timeout(
-        #         0)  # try to hold transmitting lock(station with the longest frame will get this)
-        #     if res not in result:  # check if this station got lock, if not just wait you frame time
-        #         raise simpy.Interrupt("There is a longer frame...")
-
-
-        #     with self.channel.tx_lock.request() as lock:  # this station has the longest frame so hold the lock
-        #         yield lock
-
-
-        #         for station in self.channel.back_off_list:  # stop all station which are waiting backoff as channel is not idle
-        #             if station.process.is_alive:
-        #                 station.process.interrupt()
-        #         for gnb in self.channel.back_off_list_NR:  # stop all station which are waiting backoff as channel is not idle
-        #             if gnb.process.is_alive:
-        #                 gnb.process.interrupt()
-
-        #         log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
-
-        #         yield self.env.timeout(self.frame_to_send.frame_time)  # wait this station frame time
-        #         self.channel.back_off_list.clear()  # channel idle, clear backoff waiting list
-        #         was_sent = self.check_collision()  # check if collision occurred
-
-        #         if was_sent:  # transmission successful
-        #             self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
-        #             yield self.env.timeout(self.times.get_ack_frame_time())  # wait ack
-        #             self.channel.tx_list.clear()  # clear transmitting list
-        #             self.channel.tx_list_NR.clear()
-        #             self.channel.tx_queue.release(res)  # leave the transmitting queue
-        #             return True
-
-        #         # there was collision
-        #         self.channel.tx_list.clear()  # clear transmitting list
-        #         self.channel.tx_list_NR.clear()
-        #         self.channel.tx_queue.release(res)  # leave the transmitting queue
-        #         self.channel.tx_queue = simpy.PreemptiveResource(self.env,
-        #                                                          capacity=1)  # create new empty transmitting queue
-        #         yield self.env.timeout(self.times.ack_timeout)  # simulate ack timeout after failed transmission
-        #         return False
-
-        # except simpy.Interrupt:  # this station does not have the longest frame, waiting frame time
-        #     yield self.env.timeout(self.frame_to_send.frame_time)
-
-        # was_sent = self.check_collision()
-
-        # if was_sent:  # check if collision occurred
-        #     log(self, f'Waiting for ACK time: {self.times.get_ack_frame_time()}')
-        #     yield self.env.timeout(self.times.get_ack_frame_time())  # wait ack
-        # else:
-        #     log(self, "waiting ack timeout slave")
-        #     yield self.env.timeout(Times.ack_timeout)  # simulate ack timeout after failed transmission
-        # return was_sent
-
-
-        
-    def wait_back_off(self):
-        #global start
-        self.back_off_time = self.generate_new_back_off_time(
-            self.failed_transmissions_in_row)  # generating the new Back Off time
-
-        while self.back_off_time > -1:
-            try:
-                with self.channel.tx_lock.request() as req:  # waiting  for idle channel -- empty channel
-                    yield req
-                self.back_off_time += Times.t_difs  # add DIFS time
-                log(self, f"Starting to wait backoff (with DIFS): ({self.back_off_time})u...")
-                self.first_interrupt = True
-                self.start = self.env.now  # store the current simulation time
-                self.channel.back_off_list.append(self)  # join the list off stations which are waiting Back Offs
-
-                yield self.env.timeout(self.back_off_time)  # join the environment action queue
-
-                log(self, f"Backoff waited, sending frame...")
-                self.back_off_time = -1  # leave the loop
-
-                self.channel.back_off_list.remove(self)  # leave the waiting list as Backoff was waited successfully
-
-            except simpy.Interrupt:  # handle the interruptions from transmitting stations
-                if self.first_interrupt and self.start is not None:
-                    #tak jest po mojemu:
-                    log(self, "Waiting was interrupted, waiting to resume backoff...")
-                    all_waited = self.env.now - self.start
-                    if all_waited <= Times.t_difs:
-                        self.back_off_time -= Times.t_difs
-                        log(self, f"Interupted in DIFS ({Times.t_difs}), backoff {self.back_off_time}, already waited: {all_waited}")
-                    else:
-                        back_waited = all_waited - Times.t_difs
-                        slot_waited = int(back_waited / Times.t_slot)
-                        self.back_off_time -= ((slot_waited * Times.t_slot) + Times.t_difs)
-                        log(self,
-                            f"Completed slots(9us) {slot_waited} = {(slot_waited * Times.t_slot)}  plus DIFS time {Times.t_difs}")
-                        log(self,
-                            f"Backoff decresed by {((slot_waited * Times.t_slot) + Times.t_difs)} new Backoff {self.back_off_time}")
-                    self.first_interrupt = False
+        wait_time = max(0, self.next_slot - self.env.now)
+        yield self.env.timeout(wait_time)
+        self.next_slot += self.config.attack_slot_us
 
     def send_frame(self):
-        print("Transmitting now",self.env.now)
-        self.channel.tx_list.append(self)  # add station to currently transmitting list
-        res = self.channel.tx_queue.request(
-            priority=(big_num - self.frame_to_send.frame_time))  # create request basing on this station frame length
+        """
+        Registers a real ActiveTx (so victims sense/interfere with this
+        signal via the shared channel model) and decides its own
+        success/failure the same way wifi.py does: SINR at rx_pos vs a
+        threshold. The attacker has no legitimate receiver, so rx_pos is
+        just its own position - this only affects the attacker's own
+        succeeded/failed bookkeeping, not the interference it causes to
+        others (that's computed from *their* rx_pos in their own sinr_db
+        calls, same as any other ActiveTx).
+        """
+        tx_start = self.env.now
+        tx = ActiveTx(
+            tx_id=self.name,
+            tx_pos=self.pos,
+            rx_pos=self.pos,
+            tx_start=tx_start,
+            tx_power_dbm=self.config.tx_power_dbm,
+            f_hz=self.config.f_ghz,
+            pl_exp=self.config.pl_exp,
+            t_end=tx_start + self.frame_to_send.frame_time,
+            tech="WiFi"
+        )
+        self.channel.register_tx(tx)
 
+        was_sent = False
         try:
-            result = yield res | self.env.timeout(
-                0)  # try to hold transmitting lock(station with the longest frame will get this)
-            if res not in result:  # check if this station got lock, if not just wait you frame time
-                raise simpy.Interrupt("There is a longer frame...")
-
-
-            with self.channel.tx_lock.request() as lock:  # this station has the longest frame so hold the lock
-                yield lock
-
-
-                for station in self.channel.back_off_list:  # stop all station which are waiting backoff as channel is not idle
-                    if station.process.is_alive:
-                        station.process.interrupt()
-                for gnb in self.channel.back_off_list_NR:  # stop all station which are waiting backoff as channel is not idle
-                    if gnb.process.is_alive:
-                        gnb.process.interrupt()
-
-                log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
-                print('Starting sending frame:', {self.frame_to_send.frame_time})
-
-                yield self.env.timeout(self.frame_to_send.frame_time)  # wait this station frame time
-                self.channel.back_off_list.clear()  # channel idle, clear backoff waiting list
-                was_sent = self.check_collision()  # check if collision occurred
-
-                if was_sent:  # transmission successful
-                    self.channel.airtime_control[self.name] += 0#self.times.get_ack_frame_time()
-                    yield self.env.timeout(0)#self.times.get_ack_frame_time())  # wait ack
-                    self.channel.tx_list.clear()  # clear transmitting list
-                    self.channel.tx_list_NR.clear()
-                    self.channel.tx_queue.release(res)  # leave the transmitting queue
-                    return True
-
-                # there was collision
-                self.channel.tx_list.clear()  # clear transmitting list
-                self.channel.tx_list_NR.clear()
-                self.channel.tx_queue.release(res)  # leave the transmitting queue
-                self.channel.tx_queue = simpy.PreemptiveResource(self.env,
-                                                                 capacity=1)  # create new empty transmitting queue
-                yield self.env.timeout(self.times.ack_timeout)  # simulate ack timeout after failed transmission
-                return False
-
-        except simpy.Interrupt:  # this station does not have the longest frame, waiting frame time
             yield self.env.timeout(self.frame_to_send.frame_time)
+            sinr = self.channel.sinr_db(tx)
+            log(self, f"Attack TX SINR(dB) = {sinr:.2f} dB")
+            was_sent = (sinr >= self.config.attacker_sinr_thr_db)
+            if was_sent:
+                self.sent_completed()
+            else:
+                self.sent_failed()
+        finally:
+            yield self.env.timeout(0)
+            self.channel.unregister_tx(tx)
 
-        was_sent = self.check_collision()
-
-        if was_sent:  # check if collision occurred
-            log(self, f'Waiting for ACK time: {self.times.get_ack_frame_time()}')
-            yield self.env.timeout(self.times.get_ack_frame_time())  # wait ack
-        else:
-            log(self, "waiting ack timeout slave")
-            yield self.env.timeout(Times.ack_timeout)  # simulate ack timeout after failed transmission
         return was_sent
+    # Rashed-Step pre_5.D-02-06-2026-end
 
-    def check_collision(self):  # check if the collision occurred
-
-        if (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) > 1 or (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) == 0:
-            self.sent_failed()
-            return False
-        else:
-            self.sent_completed()
-            return True
+    # Rashed-Step pre_5.D-02-06-2026-start
+    # Retired: old tx_lock / tx_list based wait_back_off, send_frame,
+    # observe_transmission, wait_to_transmit, send_dummy_frame and
+    # check_collision. These relied on channel.tx_lock and channel.tx_list,
+    # which Step 3/4 removed from the WiFi/NR-U CCA and collision decisions
+    # (replaced by channel.is_busy / channel.register_tx / channel.sinr_db).
+    # Kept here as comments for reference rather than deleted.
+    #
+    # def wait_to_transmit(self,waiting_time):
+    #     yield self.env.timeout(self.waiting_time)
+    #
+    # def observe_transmission(self):
+    #     observer_time=20000
+    #     while self.env.now < observer_time+1000:
+    #         try:
+    #             with self.channel.tx_lock.request() as req:
+    #                 yield req
+    #             self.first_interrupt = True
+    #             self.start = self.env.now
+    #             self.channel.back_off_list.append(self)
+    #             yield self.env.timeout(observer_time)
+    #             self.channel.back_off_list.remove(self)
+    #         except simpy.Interrupt:
+    #             if self.first_interrupt and self.start is not None:
+    #                 current_time = self.env.now
+    #                 self.next_slot = current_time+500
+    #                 self.waiting_time = self.next_slot-current_time-20
+    #
+    # def send_dummy_frame(self):
+    #     self.channel.tx_list.append(self)
+    #     res = self.channel.tx_queue.request(priority=(big_num - self.frame_to_send.frame_time))
+    #     if self.channel.n_of_eNB>0:
+    #         yield self.env.timeout(10000)
+    #         return True
+    #     else:
+    #         yield self.env.timeout(10000)
+    #         return True
+    #
+    # def wait_back_off(self):
+    #     self.back_off_time = self.generate_new_back_off_time(self.failed_transmissions_in_row)
+    #     while self.back_off_time > -1:
+    #         try:
+    #             with self.channel.tx_lock.request() as req:
+    #                 yield req
+    #             self.back_off_time += Times.t_difs
+    #             self.first_interrupt = True
+    #             self.start = self.env.now
+    #             self.channel.back_off_list.append(self)
+    #             yield self.env.timeout(self.back_off_time)
+    #             self.back_off_time = -1
+    #             self.channel.back_off_list.remove(self)
+    #         except simpy.Interrupt:
+    #             if self.first_interrupt and self.start is not None:
+    #                 all_waited = self.env.now - self.start
+    #                 if all_waited <= Times.t_difs:
+    #                     self.back_off_time -= Times.t_difs
+    #                 else:
+    #                     back_waited = all_waited - Times.t_difs
+    #                     slot_waited = int(back_waited / Times.t_slot)
+    #                     self.back_off_time -= ((slot_waited * Times.t_slot) + Times.t_difs)
+    #                 self.first_interrupt = False
+    #
+    # def check_collision(self):
+    #     if (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) > 1 or (len(self.channel.tx_list) + len(self.channel.tx_list_NR)) == 0:
+    #         self.sent_failed()
+    #         return False
+    #     else:
+    #         self.sent_completed()
+    #         return True
+    # Rashed-Step pre_5.D-02-06-2026-end
 
     def generate_new_back_off_time(self, failed_transmissions_in_row):
         upper_limit = (pow(2, failed_transmissions_in_row) * (
@@ -355,8 +235,12 @@ class RogueWiFiCAD:
         return back_off * self.times.t_slot
 
     def generate_new_frame(self):
-        # frame_length = self.times.get_ppdu_frame_time()
+        # Rashed-Step pre_5.D-02-06-2026-start
+        # frame_length=20 is intentional here (tiny "interference signal"
+        # per the CAD attack model, matching config.data_size=20) - unlike
+        # WiFi's old hardcoded 5400, this one isn't a bug.
         frame_length = 20
+        # Rashed-Step pre_5.D-02-06-2026-end
         return Frame(frame_length, self.name, self.col, self.config.data_size, self.env.now)
 
     def sent_failed(self):

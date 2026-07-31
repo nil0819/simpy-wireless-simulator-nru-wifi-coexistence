@@ -151,6 +151,8 @@ joint: 0.4984111300570852
 ----> Step 1 — Add topology + distance (positions)
 ----> Step 2 — Add path loss + received power (RSSI)
 ----> Step 3 — Per-node CCA / ED-based channel sensing
+----> Step 4 — Hidden/exposed terminal + SINR-based success/failure (mostly done, in progress)
+----> Step pre_5 — Bug fixes: multi-AP/gNB topology, WiFi airtime reporting, MCS-based frame duration, rogue AP reconnected onto ED/SINR pipeline
 
 #### Citation1
 

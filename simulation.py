@@ -42,6 +42,18 @@ def run_simulation(
 ):
     random.seed(seed)
     environment = simpy.Environment()
+
+    # Rashed-Step pre_5.D-02-06-2026-start
+    # BUGFIX: is_rogue_wifi used to only be checked *after* the topology
+    # loop had already built every AP as benign WiFi (the reassigned
+    # `config` was never used to construct anything), so --rogue True never
+    # actually spawned an attacker. Decide the WiFi config up front and use
+    # it inside the AP-building loop below.
+    if is_rogue_wifi:
+        wifi_config = ConfigRoguesWiFi()
+    else:
+        wifi_config = config
+    # Rashed-Step pre_5.D-02-06-2026-end
     # Rashed-Step 3.F-01-13-2026-start
     # channel = Channel(
     #     simpy.PreemptiveResource(environment, capacity=1),
@@ -71,6 +83,13 @@ def run_simulation(
     
 
     # Rashed-Step 1.D_2-12-26-2025-start
+    # Rashed-Step pre_5.A-02-06-2026-start
+    # BUGFIX: ap = WiFi(...) / wifi_aps.append(ap) used to sit outside this
+    # for-loop (same indent as the loop itself), so only the AP built on the
+    # loop's LAST iteration was ever instantiated regardless of
+    # number_of_stations. Moved inside the loop so every AP (and its STA
+    # list) actually gets created.
+    # Rashed-Step pre_5.A-02-06-2026-end
     wifi_aps = []
     wifi_stas = []
 
@@ -87,18 +106,36 @@ def run_simulation(
             )
             stas_for_ap.append(sta)
             wifi_stas.append(sta)
-    ap = WiFi(
-        environment,
-        ap_name,
-        channel,
-        ap_pos,
-        stas_for_ap,
-        config
-    )
-    wifi_aps.append(ap)
+
+        # Rashed-Step pre_5.A-02-06-2026-start
+        # Rashed-Step pre_5.D-02-06-2026-start
+        if is_rogue_wifi:
+            ap = RogueWiFiCAD(
+                environment,
+                ap_name,
+                channel,
+                ap_pos,
+                wifi_config
+            )
+        else:
+            ap = WiFi(
+                environment,
+                ap_name,
+                channel,
+                ap_pos,
+                stas_for_ap,
+                wifi_config
+            )
+        # Rashed-Step pre_5.D-02-06-2026-end
+        wifi_aps.append(ap)
+        # Rashed-Step pre_5.A-02-06-2026-end
     # Rashed-Step 1.D_2-12-26-2025-end
 
     # Rashed-Step 1.D_3-12-26-2025-start
+    # Rashed-Step pre_5.A-02-06-2026-start
+    # BUGFIX: same issue as above for gNBs - g = Gnb(...) / gnbs.append(g)
+    # moved inside the loop.
+    # Rashed-Step pre_5.A-02-06-2026-end
     gnbs = []
     ues = []
     for i in range(1, number_of_gnb + 1):
@@ -114,23 +151,31 @@ def run_simulation(
             )
             ues_for_gnb.append(ue)
             ues.append(ue)
-    g = Gnb(
-        environment,
-        gnb_name,
-        channel,
-        gnb_pos,
-        ues_for_gnb,
-        configNr
-    )
-    gnbs.append(g)
+
+        # Rashed-Step pre_5.A-02-06-2026-start
+        g = Gnb(
+            environment,
+            gnb_name,
+            channel,
+            gnb_pos,
+            ues_for_gnb,
+            configNr
+        )
+        gnbs.append(g)
+        # Rashed-Step pre_5.A-02-06-2026-end
     # Rashed-Step 1.D_3-12-26-2025-end
 
     # Rashed-Step 1.E-12-26-2025-start
     print("=== Wi-Fi Topology ===")
     for ap in wifi_aps:
         print(ap.name, ap.pos)
-        for sta in ap.sta_list:
+        # Rashed-Step pre_5.D-02-06-2026-start
+        # BUGFIX: RogueWiFiCAD has no sta_list (an attacker has no
+        # legitimate associated STA), so this crashed with AttributeError
+        # whenever --rogue True was used. Guard with getattr.
+        for sta in getattr(ap, "sta_list", []):
             print("  ", sta.name, sta.pos, "d=", dist(ap.pos, sta.pos))
+        # Rashed-Step pre_5.D-02-06-2026-end
 
     print("=== NR-U Topology ===")
     for gnb in gnbs:
@@ -139,24 +184,20 @@ def run_simulation(
             print("  ", ue.name, ue.pos, "d=", dist(gnb.pos, ue.pos))
     # Rashed-Step 1.E-12-26-2025-end
 
-
-
-
-    # is_wifi_rogue = 0 if rogue_wifi else 1
-
-    # print(is_wifi_rogue)
-
-    if is_rogue_wifi:
-        print(is_rogue_wifi)
-        print("Rogue WiFi")
-        config = ConfigRoguesWiFi()
-    else:
-        print(is_rogue_wifi)
-        print("Benign WiFi")
-        config = Config()
+    # Rashed-Step pre_5.D-02-06-2026-start
+    # BUGFIX: this used to reassign `config` to a fresh ConfigRoguesWiFi()/
+    # Config() *after* the AP loop had already built every AP with the
+    # original `config` argument, so it never affected which class/config
+    # got instantiated. AP construction above now uses wifi_config (decided
+    # before the loop); reuse it here for the reporting/log lines instead of
+    # building a second, disconnected config object.
+    print(is_rogue_wifi)
+    print("Rogue WiFi" if is_rogue_wifi else "Benign WiFi")
+    config = wifi_config
+    # Rashed-Step pre_5.D-02-06-2026-end
 
     config_nr = Config_NR()
-    
+
     # Rashed-Step 1.E-12-26-2025-start
     # for i in range(1, number_of_stations + 1):
     #     if is_rogue_wifi:
@@ -246,10 +287,17 @@ def run_simulation(
 
     # nodes = number_of_stations + number_of_gnb
 
+    # Rashed-Step pre_5.B-02-06-2026-start
+    # BUGFIX: this used to read channel.airtime_data["Station {i}"], but
+    # WiFi.__init__ registers airtime under the AP's real name ("AP {i}"),
+    # so these lookups always hit the initial 0 and WiFi occupancy/
+    # efficiency printed as 0.0 even when frames succeeded. Fixed to use
+    # the same naming scheme WiFi actually registers under.
+    # Rashed-Step pre_5.B-02-06-2026-end
     for i in range(1, number_of_stations + 1):
-        channel_occupancy_time += channel.airtime_data["Station {}".format(i)] + channel.airtime_control[
-            "Station {}".format(i)]
-        channel_efficiency += channel.airtime_data["Station {}".format(i)]
+        channel_occupancy_time += channel.airtime_data["AP {}".format(i)] + channel.airtime_control[
+            "AP {}".format(i)]
+        channel_efficiency += channel.airtime_data["AP {}".format(i)]
 
     for i in range(1, number_of_gnb + 1):
         channel_occupancy_time_NR += channel.airtime_data_NR["Gnb {}".format(i)] + channel.airtime_control_NR[
