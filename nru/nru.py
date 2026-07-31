@@ -413,7 +413,13 @@ class Gnb:
         # Rashed-Step 4.D_4-02-03-2026-end
         # Rashed-Step 4.B_3-01-20-2026-end
 
-        with self.channel.tx_queue.request(priority=(big_num - self.transmission_to_send.transmission_time)) as req:
+        # Rashed-Step 5.E.1-02-06-2026-start
+        # BUGFIX: was self.channel.tx_queue (WiFi's queue - shared with
+        # every WiFi AP AND the rogue AP), so NR-U transmissions competed
+        # for the same MAC-layer resource as WiFi even on a totally
+        # separate, non-overlapping frequency. Now uses its own queue.
+        with self.channel.tx_queue_nru.request(priority=(big_num - self.transmission_to_send.transmission_time)) as req:
+        # Rashed-Step 5.E.1-02-06-2026-end
             yield req
             # Rashed-Step 4.A-01-20-2026-start
             # with self.channel.tx_lock.request() as lock:

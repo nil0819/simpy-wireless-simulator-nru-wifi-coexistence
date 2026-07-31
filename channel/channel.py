@@ -43,6 +43,18 @@ class ActiveTx:
 @dataclass()
 class Channel:
     # lock for the stations with the longest frame to transmit
+    # Rashed-Step 5.E.1-02-06-2026-start
+    # BUGFIX: this used to be THE ONE tx_queue shared by WiFi AND NR-U
+    # (and the rogue AP), so even after Step 5.E made CCA/SINR
+    # frequency-aware, WiFi and NR-U on completely separate, non-
+    # overlapping frequencies still couldn't transmit "at the same time"
+    # in the MAC layer - they were still taking turns holding this single
+    # capacity=1 resource. Confirmed by comparing WiFi running alone
+    # (2521 succ in a 1s test) vs WiFi + a gNB on a totally separate
+    # frequency (394 succ) - should have been ~equal if truly independent.
+    # This field is now WiFi's queue specifically; see tx_queue_nru below
+    # for NR-U's own queue.
+    # Rashed-Step 5.E.1-02-06-2026-end
     tx_queue: simpy.PreemptiveResource
     # channel lock (locked when there is ongoing transmission)
     tx_lock: simpy.Resource
@@ -88,10 +100,24 @@ class Channel:
     shadow_cache: Dict[Tuple[str, Pos], float] = field(default_factory=dict)
     # Rashed-Step 5.B-02-06-2026-end
 
+    # Rashed-Step 5.E.1-02-06-2026-start
+    # NR-U's own tx_queue, separate from WiFi's (tx_queue above). Optional/
+    # None by default and lazily built in __post_init__ (needs a real
+    # simpy.Environment, which isn't available until construction time via
+    # tx_lock._env) so existing callers - simulation.py's Channel(...) and
+    # the 3 standalone test/*.py files - don't need to be touched just to
+    # keep constructing Channel the way they already do.
+    tx_queue_nru: Optional[simpy.PriorityResource] = None
+    # Rashed-Step 5.E.1-02-06-2026-end
+
      # Rashed-Step 3.B-01-12-2026-start
     def __post_init__(self):
             self.env = self.tx_lock._env
             self.state_changed = self.env.event()
+            # Rashed-Step 5.E.1-02-06-2026-start
+            if self.tx_queue_nru is None:
+                self.tx_queue_nru = simpy.PriorityResource(self.env, capacity=1)
+            # Rashed-Step 5.E.1-02-06-2026-end
 
 
     def _pulse_state_changed(self):
