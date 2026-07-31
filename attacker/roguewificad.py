@@ -157,11 +157,29 @@ class RogueWiFiCAD:
                 self.sent_completed()
             else:
                 self.sent_failed()
-        finally:
+            # Rashed-Step 5.I-02-06-2026-start
+            # Same tie-break-preserving yield as wifi.WiFi.send_frame()/
+            # nru.Gnb.send_transmission() - lets another transmission
+            # ending at this exact same env.now still see this one in
+            # channel.active_txs while computing its own SINR.
             yield self.env.timeout(0)
+            # Rashed-Step 5.I-02-06-2026-end
             # Rashed-Step 5.1-02-06-2026-start
             self.channel.unregister_tx(tx, success=was_sent)
             # Rashed-Step 5.1-02-06-2026-end
+        except BaseException:
+            # Rashed-Step 5.I-02-06-2026-start
+            # BUGFIX: this used to be `finally: yield ...; unregister_tx
+            # (...)`, which raised "RuntimeError: generator ignored
+            # GeneratorExit" whenever this generator got closed while
+            # still mid-transmission (e.g. at simulation shutdown) - see
+            # the identical fix + full explanation in wifi.WiFi.
+            # send_frame() and nru.Gnb.send_transmission(). Same fix
+            # here: normal completion (above) is unchanged; abrupt
+            # closure/any other exception gets only synchronous cleanup.
+            self.channel.unregister_tx(tx, success=was_sent)
+            raise
+            # Rashed-Step 5.I-02-06-2026-end
 
         return was_sent
     # Rashed-Step pre_5.D-02-06-2026-end
