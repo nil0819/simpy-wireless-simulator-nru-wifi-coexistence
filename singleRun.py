@@ -92,6 +92,10 @@ def parse_pos_list(raw_values, label: str):
 @click.option("--wifi-freq-ghz", "wifi_freq_ghz", type=float, default=5.18, help="Wi-Fi center frequency (GHz). Default matches --nru-freq-ghz's default (full co-channel overlap, same as before Step 5.E). Set them apart to model adjacent/non-overlapping channels.")
 @click.option("--nru-freq-ghz", "nru_freq_ghz", type=float, default=5.18, help="NR-U center frequency (GHz). See --wifi-freq-ghz.")
 # Rashed-Step 5.E-02-06-2026-end
+# Rashed-Step 5.F-02-06-2026-start
+@click.option("--wifi-tx-power-dbm", "wifi_tx_power_dbm", type=float, default=20.0, help="Wi-Fi tx power (dBm), treated as EIRP directly (no separate antenna-gain model). Checked at startup against the FCC U-NII EIRP cap for --wifi-freq-ghz (warning only, not clamped/enforced). Default (20.0) matches wifi.Config.tx_power_dbm's pre-existing class default - regression-safe.")
+@click.option("--nru-tx-power-dbm", "nru_tx_power_dbm", type=float, default=23.0, help="NR-U tx power (dBm). See --wifi-tx-power-dbm. Default (23.0) matches nru.Config_NR.tx_power_dbm's pre-existing class default - regression-safe (NOT the same default as --wifi-tx-power-dbm, intentionally, to match each config's own prior constant).")
+# Rashed-Step 5.F-02-06-2026-end
 
 def single_run(
         runs: int,
@@ -136,8 +140,12 @@ def single_run(
         # Rashed-Step 5.D-02-06-2026-end
         # Rashed-Step 5.E-02-06-2026-start
         wifi_freq_ghz: float,
-        nru_freq_ghz: float
+        nru_freq_ghz: float,
         # Rashed-Step 5.E-02-06-2026-end
+        # Rashed-Step 5.F-02-06-2026-start
+        wifi_tx_power_dbm: float,
+        nru_tx_power_dbm: float
+        # Rashed-Step 5.F-02-06-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -161,8 +169,11 @@ def single_run(
                               wifi_sinr_thr_db_override=wifi_sinr_thr_db_override,
                               # Rashed-Step 5.D-02-06-2026-end
                               # Rashed-Step 5.E-02-06-2026-start
-                              f_ghz=wifi_freq_ghz * 1e9
+                              f_ghz=wifi_freq_ghz * 1e9,
                               # Rashed-Step 5.E-02-06-2026-end
+                              # Rashed-Step 5.F-02-06-2026-start
+                              tx_power_dbm=wifi_tx_power_dbm
+                              # Rashed-Step 5.F-02-06-2026-end
                               ),
                        Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync, min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot,
                                  bandwidth_mhz=nru_bandwidth_mhz, noise_figure_db=nru_noise_figure_db,
@@ -170,8 +181,11 @@ def single_run(
                                  mcs=nru_mcs, nru_sinr_thr_db_override=nru_sinr_thr_db_override,
                                  # Rashed-Step 5.D-02-06-2026-end
                                  # Rashed-Step 5.E-02-06-2026-start
-                                 f_ghz=nru_freq_ghz * 1e9
+                                 f_ghz=nru_freq_ghz * 1e9,
                                  # Rashed-Step 5.E-02-06-2026-end
+                                 # Rashed-Step 5.F-02-06-2026-start
+                                 tx_power_dbm=nru_tx_power_dbm
+                                 # Rashed-Step 5.F-02-06-2026-end
                                  ),
                        # Rashed-Step 5.C-02-06-2026-end
                        backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR, rogue_wifi,

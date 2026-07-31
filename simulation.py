@@ -12,6 +12,9 @@ from wifi.sta import *
 # Rashed-Step 5.A-02-06-2026-start
 from typing import Optional
 # Rashed-Step 5.A-02-06-2026-end
+# Rashed-Step 5.F-02-06-2026-start
+from common.common_phy import check_eirp_compliance
+# Rashed-Step 5.F-02-06-2026-end
 
 
 # Rashed-Step 1.D_2-12-26-2025-start
@@ -230,6 +233,19 @@ def run_simulation(
     print("Rogue WiFi" if is_rogue_wifi else "Benign WiFi")
     config = wifi_config
     # Rashed-Step pre_5.D-02-06-2026-end
+
+    # Rashed-Step 5.F-02-06-2026-start
+    # Informational-only regulatory EIRP check (does not clamp/raise) -
+    # see common_phy.check_eirp_compliance() for the U-NII band table and
+    # the simplifications involved (tx_power_dbm treated as EIRP directly,
+    # no separate antenna-gain field). Checked once per run against each
+    # tech's configured frequency, not per-AP/gNB, since every WiFi AP
+    # shares wifi_config and every gNB shares configNr in this CLI.
+    if number_of_stations != 0:
+        check_eirp_compliance("WiFi", wifi_config.tx_power_dbm, wifi_config.f_ghz)
+    if number_of_gnb != 0:
+        check_eirp_compliance("NR-U", configNr.tx_power_dbm, configNr.f_ghz)
+    # Rashed-Step 5.F-02-06-2026-end
 
     config_nr = Config_NR()
 
