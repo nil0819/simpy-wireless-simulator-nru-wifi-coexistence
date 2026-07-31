@@ -6,9 +6,9 @@ from common.common import *
 from dataclasses import dataclass
 import simpy
 import math
-from common.common_phy import rx_power_dbm, dbm_to_mw, mw_to_dbm, Pos
+from common.common_phy import rx_power_dbm, dbm_to_mw, mw_to_dbm, Pos, sample_shadow_db
 from typing import Optional, List
-from typing import Any, List
+from typing import Any, List, Tuple
 # Rashed-Step 3.B-01-12-2026-end
 
 
@@ -20,6 +20,9 @@ class ActiveTx:
     # Rashed-Step 3.F-01-13-2026-start
     tx_start: int
     # Rashed-Step 3.F-01-13-2026-end
+    # Rashed-Step 4.B_1-01-20-2026-start
+    rx_pos: Pos 
+    # Rashed-Step 4.B_1-01-20-2026-end
     tx_power_dbm: float
     f_hz: float
     pl_exp: float
@@ -64,6 +67,18 @@ class Channel:
     env: simpy.Environment = field(init=False)
     # Rashed-Step 3.B-01-12-2026-end
 
+    # Rashed-Step 5.B-02-06-2026-start
+    # 0.0 = shadowing disabled (default - deterministic path loss only,
+    # matches pre-Step-5.B behavior bit-for-bit). Typical indoor log-normal
+    # shadowing sigma is ~4-8 dB.
+    shadowing_sigma_db: float = 0.0
+    # One stable shadow draw per (transmitter, receiver position) pair,
+    # cached for the life of the run - "once per link", not re-rolled every
+    # transmission. Keyed by rx_pos rather than a receiver id since that's
+    # what's already available everywhere shadow_db() is called from.
+    shadow_cache: Dict[Tuple[str, Pos], float] = field(default_factory=dict)
+    # Rashed-Step 5.B-02-06-2026-end
+
      # Rashed-Step 3.B-01-12-2026-start
     def __post_init__(self):
             self.env = self.tx_lock._env
@@ -106,6 +121,23 @@ class Channel:
     # Rashed-Step 3.B-01-12-2026-end
 
 
+    # Rashed-Step 5.B-02-06-2026-start
+    def shadow_db(self, tx_id: str, rx_pos: Pos) -> float:
+        """
+        Stable log-normal shadow-fading value for the (tx_id, rx_pos) link,
+        sampled once and cached for the rest of the run. Returns 0.0
+        immediately (no cache write, no RNG draw) when shadowing_sigma_db
+        <= 0, so disabling shadowing is exactly equivalent to the old
+        deterministic-only path loss.
+        """
+        if self.shadowing_sigma_db <= 0.0:
+            return 0.0
+        key = (tx_id, rx_pos)
+        if key not in self.shadow_cache:
+            self.shadow_cache[key] = sample_shadow_db(self.shadowing_sigma_db)
+        return self.shadow_cache[key]
+    # Rashed-Step 5.B-02-06-2026-end
+
     # Rashed-Step 3.C-01-12-2026-start
     def sensed_energy_dbm(self, sense_pos: Pos, exclude_tx_id: Optional[str] = None) -> float:
         total_mw = 0.0
@@ -124,7 +156,10 @@ class Channel:
              if exclude_tx_id is not None and tx.tx_id == exclude_tx_id:
                   continue
              d = dist(tx.tx_pos, sense_pos)
-             pr = rx_power_dbm(tx.tx_power_dbm, d, tx.f_hz, n = tx.pl_exp)
+             # Rashed-Step 5.B-02-06-2026-start
+             shadow = self.shadow_db(tx.tx_id, sense_pos)
+             pr = rx_power_dbm(tx.tx_power_dbm, d, tx.f_hz, n = tx.pl_exp, shadow_db=shadow)
+             # Rashed-Step 5.B-02-06-2026-end
              total_mw += dbm_to_mw(pr)
 
         if total_mw == 0.0:
@@ -138,3 +173,57 @@ class Channel:
             
         
     # Rashed-Step 3.C-01-12-2026-end
+
+
+
+    # Rashed-Step 4.C-01-20-2026-start
+
+    def _rx_pwr_dbm(self, tx:ActiveTx, at_pos: Pos) -> float:
+         d = dist(tx.tx_pos, at_pos)
+         # Rashed-Step 5.B-02-06-2026-start
+         shadow = self.shadow_db(tx.tx_id, at_pos)
+         return rx_power_dbm(tx.tx_power_dbm, d, tx.f_hz, n=tx.pl_exp, shadow_db=shadow)
+         # Rashed-Step 5.B-02-06-2026-end
+    
+    def sinr_db(self, target:ActiveTx, noise_dbm: float = -94.0) -> float:
+        """
+        SINR at target.rx_pos considering only transmissions that overlap in time
+        with [target.tx_start, target.t_end].
+        """
+        s_dbm = self._rx_pwr_dbm(target, target.rx_pos)
+        s_mw = dbm_to_mw(s_dbm)
+
+        i_mw = 0.0
+
+        for other in self.active_txs:
+            if other.tx_id == target.tx_id:
+                continue
+              
+            if not (other.tx_start < target.t_end and other.t_end > target.tx_start):
+                continue
+              
+            i_dbm = self._rx_pwr_dbm(other, target.rx_pos)
+            i_mw += dbm_to_mw(i_dbm)
+
+        n_mw = dbm_to_mw(noise_dbm)
+
+        # guard against weird numerical issues
+
+        denom = i_mw + n_mw
+
+        if denom == 0.0:
+             return float('inf')
+        
+        sinr_linear = s_mw / denom
+
+        return 10.0 * math.log10(sinr_linear)
+    
+        
+
+        
+         
+
+
+
+
+    # Rashed-Step 4.C-01-20-2026-end

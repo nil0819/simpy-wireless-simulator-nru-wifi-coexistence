@@ -410,12 +410,19 @@ class WiFi:
             fr.rx_name = rx_sta.name
             fr.rx_pos = rx_sta.pos
             fr.distance_m = dist(self.pos, rx_sta.pos)
+            # Rashed-Step 5.B-02-06-2026-start
+            # Route through channel.shadow_db() so this diagnostic pr_dbm
+            # (logged on the Frame, not used for the actual success
+            # decision) reflects the same per-link shadow value sinr_db()
+            # will use at transmission time.
             fr.pr_dbm = rx_power_dbm(
                 tx_power_dbm=self.config.tx_power_dbm,
                 d_m=fr.distance_m,
                 f_hz=self.config.f_ghz,
-                n=self.config.pl_exp
+                n=self.config.pl_exp,
+                shadow_db=self.channel.shadow_db(self.name, fr.rx_pos)
             )
+            # Rashed-Step 5.B-02-06-2026-end
 
         return fr
 

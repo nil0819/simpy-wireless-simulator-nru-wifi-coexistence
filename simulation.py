@@ -49,8 +49,14 @@ def run_simulation(
         ap_positions: Optional[List[Pos]] = None,
         gnb_positions: Optional[List[Pos]] = None,
         sta_radius: float = 10.0,
-        ue_radius: float = 15.0
+        ue_radius: float = 15.0,
         # Rashed-Step 5.A-02-06-2026-end
+        # Rashed-Step 5.B-02-06-2026-start
+        # 0.0 = shadowing disabled (deterministic path loss only, same as
+        # before Step 5.B). Typical indoor log-normal shadowing sigma is
+        # ~4-8 dB.
+        shadowing_sigma_db: float = 0.0
+        # Rashed-Step 5.B-02-06-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -87,7 +93,10 @@ def run_simulation(
         airtime_data,
         airtime_control,
         airtime_data_NR,
-        airtime_control_NR
+        airtime_control_NR,
+        # Rashed-Step 5.B-02-06-2026-start
+        shadowing_sigma_db=shadowing_sigma_db
+        # Rashed-Step 5.B-02-06-2026-end
     )
 
     # Rashed-Step 3.F-01-13-2026-end

@@ -74,6 +74,9 @@ def parse_pos_list(raw_values, label: str):
 @click.option("--sta-radius", "sta_radius", type=float, default=10.0, help="Radius (m) around its AP within which an associated Wi-Fi STA is randomly placed")
 @click.option("--ue-radius", "ue_radius", type=float, default=15.0, help="Radius (m) around its gNB within which an associated NR-U UE is randomly placed")
 # Rashed-Step 5.A-02-06-2026-end
+# Rashed-Step 5.B-02-06-2026-start
+@click.option("--shadowing-sigma-db", "shadowing_sigma_db", type=float, default=0.0, help="Log-normal shadow fading std dev in dB, applied on top of the deterministic path loss (0 = disabled/deterministic, matches pre-Step-5.B behavior; typical indoor value ~4-8)")
+# Rashed-Step 5.B-02-06-2026-end
 
 def single_run(
         runs: int,
@@ -100,8 +103,11 @@ def single_run(
         ap_pos: tuple,
         gnb_pos: tuple,
         sta_radius: float,
-        ue_radius: float
+        ue_radius: float,
         # Rashed-Step 5.A-02-06-2026-end
+        # Rashed-Step 5.B-02-06-2026-start
+        shadowing_sigma_db: float
+        # Rashed-Step 5.B-02-06-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -124,8 +130,11 @@ def single_run(
                        # Rashed-Step 5.A-02-06-2026-start
                        area_w=area_w, area_h=area_h,
                        ap_positions=ap_positions, gnb_positions=gnb_positions,
-                       sta_radius=sta_radius, ue_radius=ue_radius
+                       sta_radius=sta_radius, ue_radius=ue_radius,
                        # Rashed-Step 5.A-02-06-2026-end
+                       # Rashed-Step 5.B-02-06-2026-start
+                       shadowing_sigma_db=shadowing_sigma_db
+                       # Rashed-Step 5.B-02-06-2026-end
                        )
 
 

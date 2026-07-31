@@ -36,6 +36,10 @@ class Config_NR:
     ed_threshold_dbm: float = -72.0   # example; tune later
     # Rashed-Step 3.A-12-26-2025-end
 
+    # Rashed-Step 4.D_1-01-28-2026-start
+    nru_sinr_thr_db: float = 10.0 #starting with 10 dB
+    # Rashed-Step 4.D_1-01-28-2026-end
+
 
 
 @dataclass()
@@ -58,6 +62,8 @@ class Transmission_NR:
     distance_m: float = None
     pr_dbm: float = None
     # Rashed-Step 2.B_2-12-30-2025-end
+
+    
 
     
 
@@ -103,12 +109,16 @@ class Gnb:
         self.time_to_next_sync_slot = 0
         self.waiting_backoff = False
         self.start_nr = 0
+        
 
 
         # Rashed-Step 1.C_2-12-26-2025-start
         self.pos = pos
         self.ue_list = ue_list
         # Rashed-Step 1.C_2-12-26-2025-end
+        # Rashed-Step 4.C_2-01-21-2026-start
+        self.sinr_print_ctr = 0
+        # Rashed-Step 4.C_2-01-21-2026-end
 
     def start(self):
         # Rashed-Step 3.F-12-26-2025-start
@@ -346,12 +356,19 @@ class Gnb:
 
     def send_transmission(self):
         self.transmission_to_send = self.gen_new_transmission()
+        # Rashed-Step 4.B_3-01-20-2026-start
+        #rx_pos = self.ue_list[0].pos if self.ue_list else self.pos
+        # Rashed-Step 4.D_4-02-03-2026-start
+        rx_pos=self.transmission_to_send.rx_pos if self.transmission_to_send.rx_pos is not None else self.pos
+        # Rashed-Step 4.D_4-02-03-2026-end
+        # Rashed-Step 4.B_3-01-20-2026-end
 
         with self.channel.tx_queue.request(priority=(big_num - self.transmission_to_send.transmission_time)) as req:
             yield req
-
-            with self.channel.tx_lock.request() as lock:
-                yield lock
+            # Rashed-Step 4.A-01-20-2026-start
+            # with self.channel.tx_lock.request() as lock:
+            #     yield lock
+            # Rashed-Step 4.A-01-20-2026-end
 
             log(self, f'Starting transmission: {self.transmission_to_send.transmission_time}')
 
@@ -361,6 +378,9 @@ class Gnb:
             active = ActiveTx(
                 tx_id=self.name,
                 tx_pos=self.pos,
+                # Rashed-Step 4.B_3-01-20-2026-start
+                rx_pos=rx_pos,
+                # Rashed-Step 4.B_3-01-20-2026-end
                 tx_start=tx_start,
                 tx_power_dbm=self.config_nr.tx_power_dbm,
                 f_hz=self.config_nr.f_ghz,
@@ -368,12 +388,31 @@ class Gnb:
                 t_end=tx_start + tx_dur,
                 tech="NRU"
             )
+            # Rashed-Step 4.B_4-01-20-2026-start
+            #print(self.env.now, self.name, "TX->RX d=", dist(self.pos, rx_pos))
+            # Rashed-Step 4.B_4-01-20-2026-end
             self.channel.register_tx(active)
 
             try:
                 yield self.env.timeout(tx_dur)
-                was_sent = self.check_collision()
+                # Rashed-Step 4.C_2-01-21-2026-start
+                self.sinr_print_ctr += 1
+                if self.sinr_print_ctr % 50 == 0:
+                    print(self.env.now, self.name, "NRU SINR(dB) =", self.channel.sinr_db(active))
+                # Rashed-Step 4.C_2-01-21-2026-end
+                # Rashed-Step 4.D_3-01-29-2026-start
+                #was_sent = self.check_collision()
+                sinr = self.channel.sinr_db(active)
+                was_sent = (sinr >= self.config_nr.nru_sinr_thr_db)
+                if was_sent:
+                    self.sent_completed()
+                else:
+                    self.sent_failed()
+                # Rashed-Step 4.D_3-01-29-2026-start
             finally:
+                # Rashed-Step 4.C_2-01-21-2026-start
+                yield self.env.timeout(0)
+                # Rashed-Step 4.C_2-01-21-2026-end
                 self.channel.unregister_tx(active)
 
         # after leaving the 'with', resource is released automatically
@@ -448,12 +487,15 @@ class Gnb:
             tx.rx_pos = rx_ue.pos
             tx.distance_m = dist(self.pos, rx_ue.pos)
 
+            # Rashed-Step 5.B-02-06-2026-start
             tx.pr_dbm = rx_power_dbm(
                 tx_power_dbm=self.config_nr.tx_power_dbm,
                 d_m= tx.distance_m,
-                f_hz=self.config_nr.f_ghz, 
-                n = self.config_nr.pl_exp
+                f_hz=self.config_nr.f_ghz,
+                n = self.config_nr.pl_exp,
+                shadow_db=self.channel.shadow_db(self.name, tx.rx_pos)
             )
+            # Rashed-Step 5.B-02-06-2026-end
 
         return tx
         
@@ -482,7 +524,10 @@ class Gnb:
     # Rashed-Step 3.E_1-12-26-2025-end
 
     def sent_failed(self):
-        log(self, "There was a collision")
+        # Rashed-Step 2.D_4-02-03-2026-start
+        #log(self, "There was a collision")
+        log(self, f"TX failed (SINR<{self.config_nr.nru_sinr_thr_db} dB)")
+        # Rashed-Step 2.D_4-02-03-2026-end
         self.transmission_to_send.number_of_retransmissions += 1
         self.channel.failed_transmissions_NR += 1
         self.failed_transmissions += 1
