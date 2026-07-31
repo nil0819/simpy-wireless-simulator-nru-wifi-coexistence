@@ -264,7 +264,36 @@ class WaypointMobility:
         return (dist(a, b) / self.speed_mps) * 1e6
 
     def pos_now(self) -> Pos:
-        while True:
+        # Rashed-Step 5.H-02-06-2026-start
+        # BUGFIX: found via test/test_phy_unit.py's defensive
+        # speed_mps=0 test, which hung forever. Root cause: with
+        # speed_mps<=0, _travel_time_us() always returns 0.0 regardless
+        # of the (nonzero) distance to the newly-picked target, so a
+        # segment's total duration (_travel_us + pause_us) could be 0 -
+        # elapsed_us (which never advances inside this synchronous loop;
+        # only self.env.now changes it, between calls) can then never
+        # exceed a 0-length segment, so the rollover branch below would
+        # spin picking new targets forever without ever returning.
+        # speed_mps<=0 was always meant to mean "never moves" (this is
+        # also the state simulation.py guards against ever constructing
+        # a WaypointMobility for in the first place - see the class
+        # docstring), so short-circuit it here too, directly, instead of
+        # relying only on that external guard.
+        if self.speed_mps <= 0.0:
+            return self._seg_start_pos
+        # Rashed-Step 5.H-02-06-2026-end
+
+        # Rashed-Step 5.H-02-06-2026-start
+        # Extra safety net: even with speed_mps>0, a freshly-rolled
+        # segment could in principle land on _travel_us==0 (target
+        # happens to be drawn exactly equal to the start position -
+        # astronomically unlikely for continuous random floats, but not
+        # provably impossible) combined with pause_us==0. Cap the
+        # rollover loop so a pathological run can never hang instead of
+        # just being wrong for one query.
+        max_rollovers = 10_000
+        # Rashed-Step 5.H-02-06-2026-end
+        while max_rollovers > 0:
             elapsed_us = self.env.now - self._seg_start_us
             if elapsed_us < self._travel_us:
                 frac = elapsed_us / self._travel_us
@@ -281,4 +310,10 @@ class WaypointMobility:
             self._seg_start_us += self._travel_us + self.pause_us
             self._target = rand_pos(self.area_w, self.area_h)
             self._travel_us = self._travel_time_us(self._seg_start_pos, self._target)
+            # Rashed-Step 5.H-02-06-2026-start
+            max_rollovers -= 1
+        # Give up rolling forward and just report the current segment's
+        # start position rather than spin indefinitely.
+        return self._seg_start_pos
+        # Rashed-Step 5.H-02-06-2026-end
 # Rashed-Step 5.G-02-06-2026-end
