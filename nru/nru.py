@@ -9,7 +9,32 @@ from common.common_phy import rx_power_dbm, dist
 from channel.channel import ActiveTx
 # Rashed-Step 3.E_3-01-12-2026-end
 
+# Rashed-Step 5.D-02-06-2026-start
+from common.common_phy import mcs_sinr_threshold_db
+from typing import Optional
+# Rashed-Step 5.D-02-06-2026-end
 
+
+# Rashed-Step 5.D-02-06-2026-start
+# NR-U never had an MCS/rate table before (unlike WiFi's Times.py MCS
+# dict) - transmission duration here is still purely mcot-based, not
+# MCS-dependent (a real per-MCS resource-block/throughput model is out of
+# scope for this pass). This table only feeds the success/failure SINR
+# gate, giving NR-U a similarly-shaped MCS index -> required-SINR curve to
+# WiFi's for a fair side-by-side coexistence comparison. Same caveat as
+# Times.WIFI_MCS_SINR_THRESHOLDS_DB: representative/typical values, not
+# vendor- or 3GPP-conformance-tested figures.
+NRU_MCS_SINR_THRESHOLDS_DB = {
+    0: 5.0,
+    1: 7.0,
+    2: 9.0,
+    3: 12.0,
+    4: 15.0,
+    5: 18.0,
+    6: 21.0,
+    7: 24.0,
+}
+# Rashed-Step 5.D-02-06-2026-end
 
 
 @dataclass()
@@ -37,7 +62,18 @@ class Config_NR:
     # Rashed-Step 3.A-12-26-2025-end
 
     # Rashed-Step 4.D_1-01-28-2026-start
-    nru_sinr_thr_db: float = 10.0 #starting with 10 dB
+    # Rashed-Step 5.D-02-06-2026-start
+    # UPGRADE: this used to be a single flat threshold applied regardless
+    # of mcs. Renamed to an explicit override: None (default) means "look
+    # up the required SINR for `mcs` in NRU_MCS_SINR_THRESHOLDS_DB"; set it
+    # to force a flat threshold instead (e.g. for comparison against the
+    # old behavior).
+    nru_sinr_thr_db_override: Optional[float] = None
+    # mcs is new - NR-U had no MCS concept before Step 5.D. Only feeds the
+    # SINR threshold lookup above; transmission duration stays mcot-based
+    # regardless of mcs (see NRU_MCS_SINR_THRESHOLDS_DB note above).
+    mcs: int = 4
+    # Rashed-Step 5.D-02-06-2026-end
     # Rashed-Step 4.D_1-01-28-2026-end
 
     # Rashed-Step 5.C-02-06-2026-start
@@ -418,7 +454,11 @@ class Gnb:
                 # Rashed-Step 4.D_3-01-29-2026-start
                 #was_sent = self.check_collision()
                 sinr = self.channel.sinr_db(active)
-                was_sent = (sinr >= self.config_nr.nru_sinr_thr_db)
+                # Rashed-Step 5.D-02-06-2026-start
+                required_sinr = self.required_sinr_db()
+                log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config_nr.mcs}) = {required_sinr:.2f} dB")
+                was_sent = (sinr >= required_sinr)
+                # Rashed-Step 5.D-02-06-2026-end
                 if was_sent:
                     self.sent_completed()
                 else:
@@ -551,10 +591,25 @@ class Gnb:
     
     # Rashed-Step 3.E_1-12-26-2025-end
 
+    # Rashed-Step 5.D-02-06-2026-start
+    def required_sinr_db(self) -> float:
+        """
+        Required SINR for this gNB's configured MCS, or the flat override
+        if config_nr.nru_sinr_thr_db_override is set. Shared by the
+        send_transmission() success decision and the sent_failed() log
+        line so they can't drift apart.
+        """
+        if self.config_nr.nru_sinr_thr_db_override is not None:
+            return self.config_nr.nru_sinr_thr_db_override
+        return mcs_sinr_threshold_db(NRU_MCS_SINR_THRESHOLDS_DB, self.config_nr.mcs)
+    # Rashed-Step 5.D-02-06-2026-end
+
     def sent_failed(self):
         # Rashed-Step 2.D_4-02-03-2026-start
         #log(self, "There was a collision")
-        log(self, f"TX failed (SINR<{self.config_nr.nru_sinr_thr_db} dB)")
+        # Rashed-Step 5.D-02-06-2026-start
+        log(self, f"TX failed (SINR < {self.required_sinr_db():.2f} dB)")
+        # Rashed-Step 5.D-02-06-2026-end
         # Rashed-Step 2.D_4-02-03-2026-end
         self.transmission_to_send.number_of_retransmissions += 1
         self.channel.failed_transmissions_NR += 1

@@ -1,7 +1,7 @@
 # Rashed-Step 2.A-12-30-2025-start
 import math
 import random
-from typing import Tuple
+from typing import Tuple, Dict
 from common.common import *
 
 Pos = Tuple[float, float]
@@ -76,3 +76,23 @@ def thermal_noise_dbm(bandwidth_mhz: float, noise_figure_db: float) -> float:
     bandwidth_hz = max(bandwidth_mhz, 1e-6) * 1e6
     return -174.0 + 10.0 * math.log10(bandwidth_hz) + noise_figure_db
 # Rashed-Step 5.C-02-06-2026-end
+
+# Rashed-Step 5.D-02-06-2026-start
+def mcs_sinr_threshold_db(table: Dict[int, float], mcs: int) -> float:
+    """
+    Look up the minimum SINR (dB) required for a given MCS index in a
+    {mcs_index: min_sinr_db} table (e.g. Times.WIFI_MCS_SINR_THRESHOLDS_DB
+    or nru.NRU_MCS_SINR_THRESHOLDS_DB). Clamps to the nearest defined index
+    instead of raising if mcs falls outside the table's range, so an
+    out-of-range config value degrades gracefully rather than crashing a
+    run.
+    """
+    if mcs in table:
+        return table[mcs]
+    keys = sorted(table.keys())
+    if not keys:
+        raise ValueError("mcs_sinr_threshold_db: table is empty")
+    if mcs < keys[0]:
+        return table[keys[0]]
+    return table[keys[-1]]
+# Rashed-Step 5.D-02-06-2026-end

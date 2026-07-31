@@ -12,6 +12,12 @@ from common.common_phy import dist, rx_power_dbm
 from channel.channel import ActiveTx
 # Rashed-Step 3.D-01-12-2026-end
 
+# Rashed-Step 5.D-02-06-2026-start
+from common.common_phy import mcs_sinr_threshold_db
+from Times import WIFI_MCS_SINR_THRESHOLDS_DB
+from typing import Optional
+# Rashed-Step 5.D-02-06-2026-end
+
 
 
 
@@ -35,7 +41,16 @@ class Config:
     # Rashed-Step 3.A-01-12-2026-end
 
     # Rashed-Step 4.D_1-01-28-2026-start
-    wifi_sinr_thr_db = 10.0 #starting with 10 dB
+    # Rashed-Step 5.D-02-06-2026-start
+    # BUGFIX+UPGRADE: the old `wifi_sinr_thr_db = 10.0` had no type
+    # annotation, so it was NOT actually a dataclass field - Config(...)
+    # could never set it, every instance silently used the class-level
+    # 10.0 no matter what. Given a real annotation now and repurposed as
+    # an explicit override: None (default) means "look up the required
+    # SINR for `mcs` in WIFI_MCS_SINR_THRESHOLDS_DB"; set it to force a
+    # flat threshold instead.
+    wifi_sinr_thr_db_override: Optional[float] = None
+    # Rashed-Step 5.D-02-06-2026-end
     # Rashed-Step 4.D_1-01-28-2026-end
 
     # Rashed-Step 5.C-02-06-2026-start
@@ -330,9 +345,16 @@ class WiFi:
                 # Rashed-Step 4.C_2-01-21-2026-end
                 # Rashed-Step 4.D_2-01-28-2026-start
                 sinr = self.channel.sinr_db(tx)
-                log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB")
+                # Rashed-Step 5.D-02-06-2026-start
+                # UPGRADE: required SINR now depends on the configured MCS
+                # (per-MCS table) instead of one flat threshold for every
+                # rate. wifi_sinr_thr_db_override, if set, forces a flat
+                # value instead (e.g. to compare against pre-5.D behavior).
+                required_sinr = self.required_sinr_db()
+                log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config.mcs}) = {required_sinr:.2f} dB")
+                # Rashed-Step 5.D-02-06-2026-end
                 #was_sent = self.check_collision()
-                was_sent = (sinr >= self.config.wifi_sinr_thr_db)
+                was_sent = (sinr >= required_sinr)
 
                 if was_sent:
                     self.sent_completed()
@@ -451,6 +473,17 @@ class WiFi:
         #return Frame(frame_length, self.name, self.col, self.config.data_size, self.env.now)
 
         # Rashed-Step 2.D_1-01-08-2026-end
+
+    # Rashed-Step 5.D-02-06-2026-start
+    def required_sinr_db(self) -> float:
+        """
+        Required SINR for this AP's configured MCS, or the flat override
+        if config.wifi_sinr_thr_db_override is set.
+        """
+        if self.config.wifi_sinr_thr_db_override is not None:
+            return self.config.wifi_sinr_thr_db_override
+        return mcs_sinr_threshold_db(WIFI_MCS_SINR_THRESHOLDS_DB, self.config.mcs)
+    # Rashed-Step 5.D-02-06-2026-end
 
     def sent_failed(self):
         log(self, "There was a collision")

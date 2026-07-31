@@ -83,6 +83,11 @@ def parse_pos_list(raw_values, label: str):
 @click.option("--nru-bandwidth-mhz", "nru_bandwidth_mhz", type=float, default=20.0, help="NR-U channel bandwidth (MHz), used to derive the SINR noise floor")
 @click.option("--nru-noise-figure-db", "nru_noise_figure_db", type=float, default=7.0, help="NR-U receiver noise figure (dB), used to derive the SINR noise floor")
 # Rashed-Step 5.C-02-06-2026-end
+# Rashed-Step 5.D-02-06-2026-start
+@click.option("--nru-mcs", "nru_mcs", type=int, default=4, help="NR-U MCS index (0-7), drives the required-SINR threshold via NRU_MCS_SINR_THRESHOLDS_DB. Note: unlike Wi-Fi's -m/--mcs-value, this does NOT affect NR-U transmission duration (still mcot-based).")
+@click.option("--wifi-sinr-thr-db-override", "wifi_sinr_thr_db_override", type=float, default=None, help="Force a flat Wi-Fi SINR success threshold (dB) instead of the per-MCS table lookup")
+@click.option("--nru-sinr-thr-db-override", "nru_sinr_thr_db_override", type=float, default=None, help="Force a flat NR-U SINR success threshold (dB) instead of the per-MCS table lookup")
+# Rashed-Step 5.D-02-06-2026-end
 
 def single_run(
         runs: int,
@@ -118,8 +123,13 @@ def single_run(
         wifi_bandwidth_mhz: float,
         wifi_noise_figure_db: float,
         nru_bandwidth_mhz: float,
-        nru_noise_figure_db: float
+        nru_noise_figure_db: float,
         # Rashed-Step 5.C-02-06-2026-end
+        # Rashed-Step 5.D-02-06-2026-start
+        nru_mcs: int,
+        wifi_sinr_thr_db_override: float,
+        nru_sinr_thr_db_override: float
+        # Rashed-Step 5.D-02-06-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -138,9 +148,17 @@ def single_run(
         run_simulation(ap_number, gnb_number, curr_seed, simulation_time,
                        # Rashed-Step 5.C-02-06-2026-start
                        Config(1472, wifi_cw_min, wifi_cw_max, wifi_r_limit, mcs_value,
-                              bandwidth_mhz=wifi_bandwidth_mhz, noise_figure_db=wifi_noise_figure_db),
+                              bandwidth_mhz=wifi_bandwidth_mhz, noise_figure_db=wifi_noise_figure_db,
+                              # Rashed-Step 5.D-02-06-2026-start
+                              wifi_sinr_thr_db_override=wifi_sinr_thr_db_override
+                              # Rashed-Step 5.D-02-06-2026-end
+                              ),
                        Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync, min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot,
-                                 bandwidth_mhz=nru_bandwidth_mhz, noise_figure_db=nru_noise_figure_db),
+                                 bandwidth_mhz=nru_bandwidth_mhz, noise_figure_db=nru_noise_figure_db,
+                                 # Rashed-Step 5.D-02-06-2026-start
+                                 mcs=nru_mcs, nru_sinr_thr_db_override=nru_sinr_thr_db_override
+                                 # Rashed-Step 5.D-02-06-2026-end
+                                 ),
                        # Rashed-Step 5.C-02-06-2026-end
                        backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR, rogue_wifi,
                        # Rashed-Step 5.A-02-06-2026-start

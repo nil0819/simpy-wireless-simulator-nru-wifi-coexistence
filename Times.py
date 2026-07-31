@@ -11,6 +11,26 @@ MCS = {
     7: [54, 24],
 }
 
+# Rashed-Step 5.D-02-06-2026-start
+# Approximate/typical minimum-SINR-for-reliable-decode thresholds per
+# legacy 802.11a/g OFDM MCS index, in dB. These are representative values
+# commonly used in DCF/coexistence simulation literature (rising with
+# modulation order and coding rate: BPSK 1/2 at the low end, 64-QAM 3/4 at
+# the top) - not vendor-certified figures for any specific chipset. Swap
+# these out for your own measured/published numbers if you need exact
+# reproduction of a particular paper's PHY abstraction.
+WIFI_MCS_SINR_THRESHOLDS_DB = {
+    0: 5.0,   # BPSK 1/2,   6 Mbps
+    1: 6.0,   # BPSK 3/4,   9 Mbps
+    2: 8.0,   # QPSK 1/2,  12 Mbps
+    3: 11.0,  # QPSK 3/4,  18 Mbps
+    4: 15.0,  # 16-QAM 1/2, 24 Mbps
+    5: 19.0,  # 16-QAM 3/4, 36 Mbps
+    6: 23.0,  # 64-QAM 2/3, 48 Mbps
+    7: 25.0,  # 64-QAM 3/4, 54 Mbps
+}
+# Rashed-Step 5.D-02-06-2026-end
+
 
 class Times:
 
