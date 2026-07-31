@@ -36,7 +36,12 @@ class Times:
 
     t_slot = 9  # [us]
     t_sifs = 16  # [us]
-    t_difs = 3 * t_slot + t_sifs  # [us]
+    # Rashed-Step 6.A-07-31-2026-start
+    # BUGFIX: was 3*t_slot+t_sifs = 43us. The 802.11 standard defines
+    # DIFS = SIFS + 2*aSlotTime = 34us (flagged by the realism validation
+    # report, 2026-07-31 - confirmed against 802.11a/2020 spec values).
+    t_difs = 2 * t_slot + t_sifs  # [us]
+    # Rashed-Step 6.A-07-31-2026-end
     ack_timeout = 45  # [us]
 
     # Mac overhead

@@ -430,119 +430,114 @@ class Gnb:
     def send_transmission(self):
         self.transmission_to_send = self.gen_new_transmission()
 
-        # Rashed-Step 5.E.1-02-06-2026-start
-        # BUGFIX: was self.channel.tx_queue (WiFi's queue - shared with
-        # every WiFi AP AND the rogue AP), so NR-U transmissions competed
-        # for the same MAC-layer resource as WiFi even on a totally
-        # separate, non-overlapping frequency. Now uses its own queue.
-        with self.channel.tx_queue_nru.request(priority=(big_num - self.transmission_to_send.transmission_time)) as req:
-        # Rashed-Step 5.E.1-02-06-2026-end
-            yield req
-            # Rashed-Step 4.A-01-20-2026-start
-            # with self.channel.tx_lock.request() as lock:
-            #     yield lock
-            # Rashed-Step 4.A-01-20-2026-end
+        # Rashed-Step 6.A-07-31-2026-start
+        # UPGRADE: this used to acquire self.channel.tx_queue_nru (one
+        # capacity-1 resource shared by every gNB) before transmitting, so
+        # no two gNBs could ever be "in flight" on the channel at the same
+        # simulated instant - real Cat-4 LBT collisions (two independent
+        # backoff/gap timers expiring in the same slot) were structurally
+        # impossible, mirroring the gap fixed in wifi.WiFi.send_frame() (see
+        # the Step 6.A note there) and flagged in the realism validation
+        # report (2026-07-31). wait_back_off_gap_after() already does
+        # correct per-gNB, per-slot channel sensing independently for every
+        # gNB, so removing the queue and registering the transmission
+        # immediately lets two gNBs whose backoff+gap both expire in the
+        # same tick genuinely overlap on the channel - the existing
+        # SINR/capture-effect logic below (unchanged) then decides who, if
+        # anyone, survives.
+        # Rashed-Step 6.A-07-31-2026-end
+        log(self, f'Starting transmission: {self.transmission_to_send.transmission_time}')
 
-            log(self, f'Starting transmission: {self.transmission_to_send.transmission_time}')
+        # Rashed-Step 5.G-02-06-2026-start
+        # rx_pos is read fresh, right here at actual transmission start (not
+        # back in gen_new_transmission()), so a moving UE's position is
+        # always "now".
+        tx_start = self.env.now
+        tx_pos = self.current_pos()
+        rx_ue = self.transmission_to_send.rx_ue
+        rx_pos = rx_ue.current_pos() if rx_ue is not None else tx_pos
+        tx_dur = self.transmission_to_send.transmission_time
+        # Rashed-Step 5.G-02-06-2026-end
 
-            # Rashed-Step 5.G-02-06-2026-start
-            # BUGFIX/UPGRADE (Step 5.G, G_2): rx_pos used to be read from
-            # self.transmission_to_send.rx_pos, a snapshot taken back in
-            # gen_new_transmission() - BEFORE the tx_queue_nru wait above -
-            # so a moving UE could have already moved on by actual
-            # transmission start if this gNB had to wait for the queue.
-            # Now re-read fresh from the SAME UE object gen_new_transmission()
-            # randomly chose (transmission_to_send.rx_ue), via current_pos(),
-            # right here after the wait. Falls back to self.pos when there's
-            # no UE at all, same as the old rx_pos=...else self.pos branch.
-            tx_start = self.env.now
-            tx_pos = self.current_pos()
-            rx_ue = self.transmission_to_send.rx_ue
-            rx_pos = rx_ue.current_pos() if rx_ue is not None else tx_pos
-            tx_dur = self.transmission_to_send.transmission_time
-            # Rashed-Step 5.G-02-06-2026-end
+        active = ActiveTx(
+            tx_id=self.name,
+            tx_pos=tx_pos,
+            rx_pos=rx_pos,
+            tx_start=tx_start,
+            tx_power_dbm=self.config_nr.tx_power_dbm,
+            f_hz=self.config_nr.f_ghz,
+            pl_exp=self.config_nr.pl_exp,
+            t_end=tx_start + tx_dur,
+            tech="NRU",
+            # Rashed-Step 5.C-02-06-2026-start
+            bandwidth_mhz=self.config_nr.bandwidth_mhz,
+            noise_figure_db=self.config_nr.noise_figure_db
+            # Rashed-Step 5.C-02-06-2026-end
+        )
+        # Rashed-Step 4.B_4-01-20-2026-start
+        #print(self.env.now, self.name, "TX->RX d=", dist(self.pos, rx_pos))
+        # Rashed-Step 4.B_4-01-20-2026-end
+        self.channel.register_tx(active)
 
-            active = ActiveTx(
-                tx_id=self.name,
-                tx_pos=tx_pos,
-                rx_pos=rx_pos,
-                tx_start=tx_start,
-                tx_power_dbm=self.config_nr.tx_power_dbm,
-                f_hz=self.config_nr.f_ghz,
-                pl_exp=self.config_nr.pl_exp,
-                t_end=tx_start + tx_dur,
-                tech="NRU",
-                # Rashed-Step 5.C-02-06-2026-start
-                bandwidth_mhz=self.config_nr.bandwidth_mhz,
-                noise_figure_db=self.config_nr.noise_figure_db
-                # Rashed-Step 5.C-02-06-2026-end
-            )
-            # Rashed-Step 4.B_4-01-20-2026-start
-            #print(self.env.now, self.name, "TX->RX d=", dist(self.pos, rx_pos))
-            # Rashed-Step 4.B_4-01-20-2026-end
-            self.channel.register_tx(active)
-
+        # Rashed-Step 5.1-02-06-2026-start
+        was_sent = False
+        # Rashed-Step 5.1-02-06-2026-end
+        try:
+            yield self.env.timeout(tx_dur)
+            # Rashed-Step 4.C_2-01-21-2026-start
+            self.sinr_print_ctr += 1
+            if self.sinr_print_ctr % 50 == 0:
+                print(self.env.now, self.name, "NRU SINR(dB) =", self.channel.sinr_db(active))
+            # Rashed-Step 4.C_2-01-21-2026-end
+            # Rashed-Step 4.D_3-01-29-2026-start
+            #was_sent = self.check_collision()
+            sinr = self.channel.sinr_db(active)
+            # Rashed-Step 5.D-02-06-2026-start
+            required_sinr = self.required_sinr_db()
+            log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config_nr.mcs}) = {required_sinr:.2f} dB")
+            was_sent = (sinr >= required_sinr)
+            # Rashed-Step 5.D-02-06-2026-end
+            if was_sent:
+                self.sent_completed()
+            else:
+                self.sent_failed()
+            # Rashed-Step 4.D_3-01-29-2026-start
+            # Rashed-Step 4.C_2-01-21-2026-start
+            # Yield one extra zero-duration tick before unregistering,
+            # so another transmission ending at this exact same env.now
+            # still sees this one in channel.active_txs while computing
+            # its own SINR (avoids an artificial tie-break bias from
+            # unregistering "too early" relative to a same-tick peer -
+            # see channel.sinr_db()/sensed_energy_dbm(), both of which
+            # only count what's currently in active_txs).
+            yield self.env.timeout(0)
+            # Rashed-Step 4.C_2-01-21-2026-end
             # Rashed-Step 5.1-02-06-2026-start
-            was_sent = False
+            # BUGFIX: pass success so airtime isn't recorded twice - see
+            # matching note below where the old manual
+            # airtime_data_NR += line was removed.
+            self.channel.unregister_tx(active, success=was_sent)
             # Rashed-Step 5.1-02-06-2026-end
-            try:
-                yield self.env.timeout(tx_dur)
-                # Rashed-Step 4.C_2-01-21-2026-start
-                self.sinr_print_ctr += 1
-                if self.sinr_print_ctr % 50 == 0:
-                    print(self.env.now, self.name, "NRU SINR(dB) =", self.channel.sinr_db(active))
-                # Rashed-Step 4.C_2-01-21-2026-end
-                # Rashed-Step 4.D_3-01-29-2026-start
-                #was_sent = self.check_collision()
-                sinr = self.channel.sinr_db(active)
-                # Rashed-Step 5.D-02-06-2026-start
-                required_sinr = self.required_sinr_db()
-                log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config_nr.mcs}) = {required_sinr:.2f} dB")
-                was_sent = (sinr >= required_sinr)
-                # Rashed-Step 5.D-02-06-2026-end
-                if was_sent:
-                    self.sent_completed()
-                else:
-                    self.sent_failed()
-                # Rashed-Step 4.D_3-01-29-2026-start
-                # Rashed-Step 4.C_2-01-21-2026-start
-                # Yield one extra zero-duration tick before unregistering,
-                # so another transmission ending at this exact same env.now
-                # still sees this one in channel.active_txs while computing
-                # its own SINR (avoids an artificial tie-break bias from
-                # unregistering "too early" relative to a same-tick peer -
-                # see channel.sinr_db()/sensed_energy_dbm(), both of which
-                # only count what's currently in active_txs).
-                yield self.env.timeout(0)
-                # Rashed-Step 4.C_2-01-21-2026-end
-                # Rashed-Step 5.1-02-06-2026-start
-                # BUGFIX: pass success so airtime isn't recorded twice - see
-                # matching note below where the old manual
-                # airtime_data_NR += line was removed.
-                self.channel.unregister_tx(active, success=was_sent)
-                # Rashed-Step 5.1-02-06-2026-end
-            except BaseException:
-                # Rashed-Step 5.I-02-06-2026-start
-                # BUGFIX: this used to be `finally: yield ...; unregister_tx
-                # (...)`, which ran on EVERY exit path including the
-                # generator being closed via GeneratorExit at simulation
-                # shutdown (env.run(until=...) returning while this gNB was
-                # still mid-transmission - a near-certain occurrence at the
-                # end of any run). Yielding again while a generator is being
-                # closed is invalid and raised "RuntimeError: generator
-                # ignored GeneratorExit" (printed by the interpreter as
-                # "Exception ignored in: ..." since it happens during
-                # garbage collection with no caller to propagate to -
-                # harmless to already-computed results, but noisy on every
-                # single run). Fixed the same way as wifi.WiFi.send_frame():
-                # move the yield+unregister into the normal (non-exception)
-                # tail of the try, and handle GeneratorExit (or any other
-                # exception) here with purely SYNCHRONOUS cleanup instead.
-                self.channel.unregister_tx(active, success=was_sent)
-                raise
-                # Rashed-Step 5.I-02-06-2026-end
-
-        # after leaving the 'with', resource is released automatically
+        except BaseException:
+            # Rashed-Step 5.I-02-06-2026-start
+            # BUGFIX: this used to be `finally: yield ...; unregister_tx
+            # (...)`, which ran on EVERY exit path including the
+            # generator being closed via GeneratorExit at simulation
+            # shutdown (env.run(until=...) returning while this gNB was
+            # still mid-transmission - a near-certain occurrence at the
+            # end of any run). Yielding again while a generator is being
+            # closed is invalid and raised "RuntimeError: generator
+            # ignored GeneratorExit" (printed by the interpreter as
+            # "Exception ignored in: ..." since it happens during
+            # garbage collection with no caller to propagate to -
+            # harmless to already-computed results, but noisy on every
+            # single run). Fixed the same way as wifi.WiFi.send_frame():
+            # move the yield+unregister into the normal (non-exception)
+            # tail of the try, and handle GeneratorExit (or any other
+            # exception) here with purely SYNCHRONOUS cleanup instead.
+            self.channel.unregister_tx(active, success=was_sent)
+            raise
+            # Rashed-Step 5.I-02-06-2026-end
 
         if was_sent:
             self.channel.airtime_control_NR[self.name] += self.transmission_to_send.rs_time

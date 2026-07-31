@@ -327,127 +327,130 @@ class WiFi:
 
 
     def send_frame(self):
-    # ONE request only
-        with self.channel.tx_queue.request(priority=(big_num - self.frame_to_send.frame_time)) as req:
-            yield req
+        # Rashed-Step 6.A-07-31-2026-start
+        # UPGRADE: this used to acquire self.channel.tx_queue (one
+        # capacity-1 resource shared by every WiFi AP) before transmitting,
+        # so no two WiFi APs could ever be "in flight" on the channel at
+        # the same simulated instant - real 802.11 collisions (two
+        # independent backoff counters hitting zero in the same slot) were
+        # structurally impossible. This is the gap the realism validation
+        # report (2026-07-31) flagged against Bianchi's DCF model: measured
+        # PCOLL stayed at 0.0000 for N=1/5/20 stations while Bianchi
+        # predicts 0%/22.7%/76.0%. wait_back_off() already does correct
+        # per-station, per-slot channel sensing (freeze on busy, resume on
+        # idle) independently for every AP, so removing the queue and
+        # registering the transmission immediately lets two APs whose
+        # backoff both hit zero in the same tick genuinely overlap on the
+        # channel - the existing SINR/capture-effect logic below
+        # (unchanged) then decides who, if anyone, survives, exactly like
+        # it already does for cross-technology WiFi/NR-U interference.
+        # Rashed-Step 6.A-07-31-2026-end
+        log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
+        # Rashed-Step 4.D_2-01-28-2026-end
+        # Rashed-Step 5.G-02-06-2026-start
+        # BUGFIX/UPGRADE (Step 5.G, G_2): rx_pos is computed here (right
+        # before actual transmission start), not back when send_frame()
+        # was first called, so a moving STA's position is always "now".
+        tx_start = self.env.now
+        tx_pos = self.current_pos()
+        rx_pos = self.sta_list[0].current_pos() if self.sta_list else tx_pos
+        # Rashed-Step 5.G-02-06-2026-end
+        tx = ActiveTx(
+            tx_id=self.name,
+            tx_pos=tx_pos,
+            rx_pos=rx_pos,
+            tx_start=tx_start,
+            tx_power_dbm=self.config.tx_power_dbm,
+            f_hz=self.config.f_ghz,
+            pl_exp=self.config.pl_exp,
+            t_end=tx_start + self.frame_to_send.frame_time,
+            tech="WiFi",
+            # Rashed-Step 5.C-02-06-2026-start
+            bandwidth_mhz=self.config.bandwidth_mhz,
+            noise_figure_db=self.config.noise_figure_db
+            # Rashed-Step 5.C-02-06-2026-end
+        )
+        # Rashed-Step 4.B_4-01-20-2026-start
+        #print(self.env.now, self.name, "TX->RX d=", dist(self.pos, rx_pos))
+        # Rashed-Step 4.B_4-01-20-2026-end
+        self.channel.register_tx(tx)
 
-            # optional: keep tx_lock if you want exclusive "PHY tx"
-            # Rashed-Step 4.A-01-20-2026-start
-            # with self.channel.tx_lock.request() as lock:
-            #     yield lock
-            # Rashed-Step 4.A-01-20-2026-end
+        # Rashed-Step 5.1-02-06-2026-start
+        was_sent = False
+        # Rashed-Step 5.1-02-06-2026-end
+        try:
+            yield self.env.timeout(self.frame_to_send.frame_time)
+            # Rashed-Step 4.C_2-01-21-2026-start
+            #self.sinr_print_ctr += 1
+            # if self.sinr_print_ctr % 50 == 0:
+            #     print(self.env.now, self.name, "WiFi SINR(dB) =", self.channel.sinr_db(tx))
+            # Rashed-Step 4.C_2-01-21-2026-end
             # Rashed-Step 4.D_2-01-28-2026-start
-            log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
-            # Rashed-Step 4.D_2-01-28-2026-end
-            # Rashed-Step 5.G-02-06-2026-start
-            # BUGFIX/UPGRADE (Step 5.G, G_2): rx_pos used to be computed
-            # BEFORE the tx_queue.request()/yield above, i.e. at the
-            # moment send_frame() was called, not at actual transmission
-            # start - if this AP had to wait for the queue, a moving STA
-            # could have already moved on by the time tx_start actually
-            # happens. Now computed here, after the wait, from
-            # current_pos() (dynamic if mobility is set, otherwise
-            # identical to the old self.pos/sta.pos read).
-            tx_start = self.env.now
-            tx_pos = self.current_pos()
-            rx_pos = self.sta_list[0].current_pos() if self.sta_list else tx_pos
-            # Rashed-Step 5.G-02-06-2026-end
-            tx = ActiveTx(
-                tx_id=self.name,
-                tx_pos=tx_pos,
-                rx_pos=rx_pos,
-                tx_start=tx_start,
-                tx_power_dbm=self.config.tx_power_dbm,
-                f_hz=self.config.f_ghz,
-                pl_exp=self.config.pl_exp,
-                t_end=tx_start + self.frame_to_send.frame_time,
-                tech="WiFi",
-                # Rashed-Step 5.C-02-06-2026-start
-                bandwidth_mhz=self.config.bandwidth_mhz,
-                noise_figure_db=self.config.noise_figure_db
-                # Rashed-Step 5.C-02-06-2026-end
-            )
-            # Rashed-Step 4.B_4-01-20-2026-start
-            #print(self.env.now, self.name, "TX->RX d=", dist(self.pos, rx_pos))
-            # Rashed-Step 4.B_4-01-20-2026-end
-            self.channel.register_tx(tx)
-
-            # Rashed-Step 5.1-02-06-2026-start
-            was_sent = False
-            # Rashed-Step 5.1-02-06-2026-end
-            try:
-                yield self.env.timeout(self.frame_to_send.frame_time)
-                # Rashed-Step 4.C_2-01-21-2026-start
-                #self.sinr_print_ctr += 1
-                # if self.sinr_print_ctr % 50 == 0:
-                #     print(self.env.now, self.name, "WiFi SINR(dB) =", self.channel.sinr_db(tx))
-                # Rashed-Step 4.C_2-01-21-2026-end
-                # Rashed-Step 4.D_2-01-28-2026-start
-                sinr = self.channel.sinr_db(tx)
-                # Rashed-Step 5.D-02-06-2026-start
-                # UPGRADE: required SINR now depends on the configured MCS
-                # (per-MCS table) instead of one flat threshold for every
-                # rate. wifi_sinr_thr_db_override, if set, forces a flat
-                # value instead (e.g. to compare against pre-5.D behavior).
-                required_sinr = self.required_sinr_db()
-                log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config.mcs}) = {required_sinr:.2f} dB")
-                # Rashed-Step 5.D-02-06-2026-end
-                #was_sent = self.check_collision()
-                was_sent = (sinr >= required_sinr)
-
-                if was_sent:
-                    self.sent_completed()
-                else:
-                    self.sent_failed()
-                # Rashed-Step 4.D_2-01-28-2026-end
-                # Rashed-Step 4.C_2-01-21-2026-start
-                # Yield one extra zero-duration tick before unregistering,
-                # so another transmission ending at this exact same env.now
-                # still sees this one in channel.active_txs while computing
-                # its own SINR (avoids an artificial tie-break bias from
-                # unregistering "too early" relative to a same-tick peer -
-                # see channel.sinr_db()/sensed_energy_dbm(), both of which
-                # only count what's currently in active_txs).
-                yield self.env.timeout(0)
-                # Rashed-Step 4.C_2-01-21-2026-end
-                # Rashed-Step 5.1-02-06-2026-start
-                # BUGFIX: pass success so airtime isn't recorded twice -
-                # sent_completed() below no longer touches airtime_data,
-                # unregister_tx() is now the only place that does.
-                self.channel.unregister_tx(tx, success=was_sent)
-                # Rashed-Step 5.1-02-06-2026-end
-            except BaseException:
-                # Rashed-Step 5.I-02-06-2026-start
-                # BUGFIX: this used to be `finally: yield ...; unregister_tx
-                # (...)`, which ran on EVERY exit path including the
-                # generator being closed via GeneratorExit at simulation
-                # shutdown (env.run(until=...) returning while this AP was
-                # still mid-transmission - a near-certain occurrence at the
-                # end of any run). Yielding again while a generator is being
-                # closed is invalid and raised "RuntimeError: generator
-                # ignored GeneratorExit" (printed by the interpreter as
-                # "Exception ignored in: ..." since it happens during
-                # garbage collection with no caller to propagate to -
-                # harmless to already-computed results, but noisy on every
-                # single run). Fixed by moving the yield+unregister above
-                # into the normal (non-exception) tail of the try block, and
-                # handling GeneratorExit (or any other exception) here with
-                # a purely SYNCHRONOUS cleanup instead - was_sent is still
-                # False here unless the try body got far enough to decide
-                # otherwise, matching the original finally's intent of
-                # "always unregister on the way out", just without the
-                # illegal re-yield.
-                self.channel.unregister_tx(tx, success=was_sent)
-                raise
-                # Rashed-Step 5.I-02-06-2026-end
+            sinr = self.channel.sinr_db(tx)
+            # Rashed-Step 5.D-02-06-2026-start
+            # UPGRADE: required SINR now depends on the configured MCS
+            # (per-MCS table) instead of one flat threshold for every
+            # rate. wifi_sinr_thr_db_override, if set, forces a flat
+            # value instead (e.g. to compare against pre-5.D behavior).
+            required_sinr = self.required_sinr_db()
+            log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config.mcs}) = {required_sinr:.2f} dB")
+            # Rashed-Step 5.D-02-06-2026-end
+            #was_sent = self.check_collision()
+            was_sent = (sinr >= required_sinr)
 
             if was_sent:
-                self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
-                yield self.env.timeout(self.times.get_ack_frame_time())
-                return True
+                self.sent_completed()
             else:
-                yield self.env.timeout(self.times.ack_timeout)
-                return False
+                self.sent_failed()
+            # Rashed-Step 4.D_2-01-28-2026-end
+            # Rashed-Step 4.C_2-01-21-2026-start
+            # Yield one extra zero-duration tick before unregistering,
+            # so another transmission ending at this exact same env.now
+            # still sees this one in channel.active_txs while computing
+            # its own SINR (avoids an artificial tie-break bias from
+            # unregistering "too early" relative to a same-tick peer -
+            # see channel.sinr_db()/sensed_energy_dbm(), both of which
+            # only count what's currently in active_txs).
+            yield self.env.timeout(0)
+            # Rashed-Step 4.C_2-01-21-2026-end
+            # Rashed-Step 5.1-02-06-2026-start
+            # BUGFIX: pass success so airtime isn't recorded twice -
+            # sent_completed() below no longer touches airtime_data,
+            # unregister_tx() is now the only place that does.
+            self.channel.unregister_tx(tx, success=was_sent)
+            # Rashed-Step 5.1-02-06-2026-end
+        except BaseException:
+            # Rashed-Step 5.I-02-06-2026-start
+            # BUGFIX: this used to be `finally: yield ...; unregister_tx
+            # (...)`, which ran on EVERY exit path including the
+            # generator being closed via GeneratorExit at simulation
+            # shutdown (env.run(until=...) returning while this AP was
+            # still mid-transmission - a near-certain occurrence at the
+            # end of any run). Yielding again while a generator is being
+            # closed is invalid and raised "RuntimeError: generator
+            # ignored GeneratorExit" (printed by the interpreter as
+            # "Exception ignored in: ..." since it happens during
+            # garbage collection with no caller to propagate to -
+            # harmless to already-computed results, but noisy on every
+            # single run). Fixed by moving the yield+unregister above
+            # into the normal (non-exception) tail of the try block, and
+            # handling GeneratorExit (or any other exception) here with
+            # a purely SYNCHRONOUS cleanup instead - was_sent is still
+            # False here unless the try body got far enough to decide
+            # otherwise, matching the original finally's intent of
+            # "always unregister on the way out", just without the
+            # illegal re-yield.
+            self.channel.unregister_tx(tx, success=was_sent)
+            raise
+            # Rashed-Step 5.I-02-06-2026-end
+
+        if was_sent:
+            self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
+            yield self.env.timeout(self.times.get_ack_frame_time())
+            return True
+        else:
+            yield self.env.timeout(self.times.ack_timeout)
+            return False
     # Rashed-Step 3.F-01-13-2026-end
 
     def check_collision(self):  # check if the collision occurred
