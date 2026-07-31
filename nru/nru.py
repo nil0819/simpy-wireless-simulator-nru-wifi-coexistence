@@ -13,6 +13,9 @@ from channel.channel import ActiveTx
 from common.common_phy import mcs_sinr_threshold_db
 from typing import Optional
 # Rashed-Step 5.D-02-06-2026-end
+# Rashed-Step 5.G-02-06-2026-start
+from typing import Any
+# Rashed-Step 5.G-02-06-2026-end
 
 
 # Rashed-Step 5.D-02-06-2026-start
@@ -106,6 +109,14 @@ class Transmission_NR:
     distance_m: float = None
     pr_dbm: float = None
     # Rashed-Step 2.B_2-12-30-2025-end
+    # Rashed-Step 5.G-02-06-2026-start
+    # Reference to the actual chosen NrUE object (not just a position
+    # snapshot) - gen_new_transmission() does random.choice(self.ue_list)
+    # to pick which UE this transmission targets; send_transmission()
+    # needs to re-read *that same UE's* current_pos() after potentially
+    # waiting on tx_queue_nru, not fall back to an arbitrary/first UE.
+    rx_ue: Optional[Any] = None
+    # Rashed-Step 5.G-02-06-2026-end
 
     
 
@@ -123,7 +134,10 @@ class Gnb:
             pos: Pos,
             ue_list: list,
             # Rashed-Step 1.C_2-12-26-2025-end
-            config_nr: Config_NR 
+            config_nr: Config_NR,
+            # Rashed-Step 5.G-02-06-2026-start
+            mobility: Optional[Any] = None
+            # Rashed-Step 5.G-02-06-2026-end
     ):
         self.config_nr = config_nr
         # self.times = Times(config.data_size, config.mcs)  # using Times script to get time calculations
@@ -160,9 +174,18 @@ class Gnb:
         self.pos = pos
         self.ue_list = ue_list
         # Rashed-Step 1.C_2-12-26-2025-end
+        # Rashed-Step 5.G-02-06-2026-start
+        self.mobility = mobility
+        # Rashed-Step 5.G-02-06-2026-end
         # Rashed-Step 4.C_2-01-21-2026-start
         self.sinr_print_ctr = 0
         # Rashed-Step 4.C_2-01-21-2026-end
+
+    # Rashed-Step 5.G-02-06-2026-start
+    def current_pos(self) -> Pos:
+        """See wifi.WiFi.current_pos() - same idea for gNBs."""
+        return self.mobility.pos_now() if self.mobility is not None else self.pos
+    # Rashed-Step 5.G-02-06-2026-end
 
     def start(self):
         # Rashed-Step 3.F-12-26-2025-start
@@ -198,7 +221,7 @@ class Gnb:
 
         while remaining > 0:
             # Rashed-Step 5.E-02-06-2026-start
-            if self.channel.is_busy(self.pos, self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name,
+            if self.channel.is_busy(self.current_pos(), self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name,
                                      sense_f_hz=self.config_nr.f_ghz, sense_bw_mhz=self.config_nr.bandwidth_mhz):
             # Rashed-Step 5.E-02-06-2026-end
                 log(self, f"Channel busy during backoff, pausing backoff with {remaining} us remaining")
@@ -226,7 +249,7 @@ class Gnb:
 
         while gap_remaining > 0:
             # Rashed-Step 5.E-02-06-2026-start
-            if self.channel.is_busy(self.pos, self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name,
+            if self.channel.is_busy(self.current_pos(), self.config_nr.ed_threshold_dbm, exclude_tx_id=self.name,
                                      sense_f_hz=self.config_nr.f_ghz, sense_bw_mhz=self.config_nr.bandwidth_mhz):
             # Rashed-Step 5.E-02-06-2026-end
                 log(self, f"Channel busy during gap, pausing gap with {gap_remaining} us remaining")
@@ -406,12 +429,6 @@ class Gnb:
 
     def send_transmission(self):
         self.transmission_to_send = self.gen_new_transmission()
-        # Rashed-Step 4.B_3-01-20-2026-start
-        #rx_pos = self.ue_list[0].pos if self.ue_list else self.pos
-        # Rashed-Step 4.D_4-02-03-2026-start
-        rx_pos=self.transmission_to_send.rx_pos if self.transmission_to_send.rx_pos is not None else self.pos
-        # Rashed-Step 4.D_4-02-03-2026-end
-        # Rashed-Step 4.B_3-01-20-2026-end
 
         # Rashed-Step 5.E.1-02-06-2026-start
         # BUGFIX: was self.channel.tx_queue (WiFi's queue - shared with
@@ -428,15 +445,27 @@ class Gnb:
 
             log(self, f'Starting transmission: {self.transmission_to_send.transmission_time}')
 
+            # Rashed-Step 5.G-02-06-2026-start
+            # BUGFIX/UPGRADE (Step 5.G, G_2): rx_pos used to be read from
+            # self.transmission_to_send.rx_pos, a snapshot taken back in
+            # gen_new_transmission() - BEFORE the tx_queue_nru wait above -
+            # so a moving UE could have already moved on by actual
+            # transmission start if this gNB had to wait for the queue.
+            # Now re-read fresh from the SAME UE object gen_new_transmission()
+            # randomly chose (transmission_to_send.rx_ue), via current_pos(),
+            # right here after the wait. Falls back to self.pos when there's
+            # no UE at all, same as the old rx_pos=...else self.pos branch.
             tx_start = self.env.now
+            tx_pos = self.current_pos()
+            rx_ue = self.transmission_to_send.rx_ue
+            rx_pos = rx_ue.current_pos() if rx_ue is not None else tx_pos
             tx_dur = self.transmission_to_send.transmission_time
+            # Rashed-Step 5.G-02-06-2026-end
 
             active = ActiveTx(
                 tx_id=self.name,
-                tx_pos=self.pos,
-                # Rashed-Step 4.B_3-01-20-2026-start
+                tx_pos=tx_pos,
                 rx_pos=rx_pos,
-                # Rashed-Step 4.B_3-01-20-2026-end
                 tx_start=tx_start,
                 tx_power_dbm=self.config_nr.tx_power_dbm,
                 f_hz=self.config_nr.f_ghz,
@@ -560,12 +589,24 @@ class Gnb:
 
         tx = Transmission_NR(
             transmission_time, self.name, self.col, self.env.now, airtime, rs_time)
-        
-        tx.tx_pos = self.pos
+
+        # Rashed-Step 5.G-02-06-2026-start
+        # current_pos() instead of self.pos/rx_ue.pos for this diagnostic
+        # snapshot (distance_m/pr_dbm are logged, not used for the actual
+        # send_transmission() success decision, which recomputes its own
+        # tx_pos/rx_pos fresh right at transmission time). tx.rx_ue stores
+        # the actual chosen UE object (not just its position) so
+        # send_transmission() can re-read *its* current_pos() later, after
+        # potentially waiting on tx_queue_nru - see send_transmission().
+        my_pos = self.current_pos()
+        tx.tx_pos = my_pos
+        tx.rx_ue = rx_ue
         if rx_ue is not None:
+            rx_pos = rx_ue.current_pos()
             tx.rx_name = rx_ue.name
-            tx.rx_pos = rx_ue.pos
-            tx.distance_m = dist(self.pos, rx_ue.pos)
+            tx.rx_pos = rx_pos
+            tx.distance_m = dist(my_pos, rx_pos)
+            # Rashed-Step 5.G-02-06-2026-end
 
             # Rashed-Step 5.B-02-06-2026-start
             tx.pr_dbm = rx_power_dbm(

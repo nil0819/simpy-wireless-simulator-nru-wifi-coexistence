@@ -15,6 +15,9 @@ from typing import Optional
 # Rashed-Step 5.F-02-06-2026-start
 from common.common_phy import check_eirp_compliance
 # Rashed-Step 5.F-02-06-2026-end
+# Rashed-Step 5.G-02-06-2026-start
+from common.common_phy import WaypointMobility
+# Rashed-Step 5.G-02-06-2026-end
 
 
 # Rashed-Step 1.D_2-12-26-2025-start
@@ -58,8 +61,22 @@ def run_simulation(
         # 0.0 = shadowing disabled (deterministic path loss only, same as
         # before Step 5.B). Typical indoor log-normal shadowing sigma is
         # ~4-8 dB.
-        shadowing_sigma_db: float = 0.0
+        shadowing_sigma_db: float = 0.0,
         # Rashed-Step 5.B-02-06-2026-end
+        # Rashed-Step 5.G-02-06-2026-start
+        # 0.0 (default, for every one of these) = that node type never
+        # moves - common_phy.WaypointMobility is only constructed for a
+        # node type when its speed is > 0, so a run with all four at 0.0
+        # is byte-identical to every pre-5.G run (no WaypointMobility
+        # objects exist at all, current_pos() just returns the static
+        # pos it always did). Mobile nodes roam within the same
+        # [0,area_w] x [0,area_h] box used for random initial placement.
+        ap_mobility_speed_mps: float = 0.0,
+        gnb_mobility_speed_mps: float = 0.0,
+        sta_mobility_speed_mps: float = 0.0,
+        ue_mobility_speed_mps: float = 0.0,
+        mobility_pause_s: float = 0.0
+        # Rashed-Step 5.G-02-06-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -126,14 +143,31 @@ def run_simulation(
             ap_pos = rand_pos(area_w, area_h)
         # Rashed-Step 5.A-02-06-2026-end
 
+        # Rashed-Step 5.G-02-06-2026-start
+        ap_mobility = None
+        if ap_mobility_speed_mps > 0.0:
+            ap_mobility = WaypointMobility(environment, area_w, area_h,
+                                            ap_mobility_speed_mps, mobility_pause_s, ap_pos)
+        # Rashed-Step 5.G-02-06-2026-end
+
         stas_for_ap = []
         for k in range(1, wifi_stas_per_ap + 1):
+            sta_pos = rand_pos_near(ap_pos, radius=sta_radius)
+            # Rashed-Step 5.G-02-06-2026-start
+            sta_mobility = None
+            if sta_mobility_speed_mps > 0.0:
+                sta_mobility = WaypointMobility(environment, area_w, area_h,
+                                                 sta_mobility_speed_mps, mobility_pause_s, sta_pos)
+            # Rashed-Step 5.G-02-06-2026-end
             sta = WiFiSTA(
                 name=f"STA {i}-{k}",
                 # Rashed-Step 5.A-02-06-2026-start
-                pos=rand_pos_near(ap_pos, radius=sta_radius),
+                pos=sta_pos,
                 # Rashed-Step 5.A-02-06-2026-end
-                ap_name=ap_name
+                ap_name=ap_name,
+                # Rashed-Step 5.G-02-06-2026-start
+                mobility=sta_mobility
+                # Rashed-Step 5.G-02-06-2026-end
             )
             stas_for_ap.append(sta)
             wifi_stas.append(sta)
@@ -141,6 +175,11 @@ def run_simulation(
         # Rashed-Step pre_5.A-02-06-2026-start
         # Rashed-Step pre_5.D-02-06-2026-start
         if is_rogue_wifi:
+            # Rashed-Step 5.G-02-06-2026-start
+            # NOT given mobility - attack-path changes are out of scope
+            # per current instructions (roguewificad.py is left alone
+            # elsewhere in Step 5 for the same reason).
+            # Rashed-Step 5.G-02-06-2026-end
             ap = RogueWiFiCAD(
                 environment,
                 ap_name,
@@ -155,7 +194,10 @@ def run_simulation(
                 channel,
                 ap_pos,
                 stas_for_ap,
-                wifi_config
+                wifi_config,
+                # Rashed-Step 5.G-02-06-2026-start
+                mobility=ap_mobility
+                # Rashed-Step 5.G-02-06-2026-end
             )
         # Rashed-Step pre_5.D-02-06-2026-end
         wifi_aps.append(ap)
@@ -178,14 +220,31 @@ def run_simulation(
             gnb_pos = rand_pos(area_w, area_h)
         # Rashed-Step 5.A-02-06-2026-end
 
+        # Rashed-Step 5.G-02-06-2026-start
+        gnb_mobility = None
+        if gnb_mobility_speed_mps > 0.0:
+            gnb_mobility = WaypointMobility(environment, area_w, area_h,
+                                             gnb_mobility_speed_mps, mobility_pause_s, gnb_pos)
+        # Rashed-Step 5.G-02-06-2026-end
+
         ues_for_gnb = []
         for k in range(1, nr_ues_per_gnb + 1):
+            ue_pos = rand_pos_near(gnb_pos, radius=ue_radius)
+            # Rashed-Step 5.G-02-06-2026-start
+            ue_mobility = None
+            if ue_mobility_speed_mps > 0.0:
+                ue_mobility = WaypointMobility(environment, area_w, area_h,
+                                                ue_mobility_speed_mps, mobility_pause_s, ue_pos)
+            # Rashed-Step 5.G-02-06-2026-end
             ue = NrUE(
                 name=f"UE {i}-{k}",
                 # Rashed-Step 5.A-02-06-2026-start
-                pos=rand_pos_near(gnb_pos, radius=ue_radius),
+                pos=ue_pos,
                 # Rashed-Step 5.A-02-06-2026-end
-                gnb_name=gnb_name
+                gnb_name=gnb_name,
+                # Rashed-Step 5.G-02-06-2026-start
+                mobility=ue_mobility
+                # Rashed-Step 5.G-02-06-2026-end
             )
             ues_for_gnb.append(ue)
             ues.append(ue)
@@ -197,7 +256,10 @@ def run_simulation(
             channel,
             gnb_pos,
             ues_for_gnb,
-            configNr
+            configNr,
+            # Rashed-Step 5.G-02-06-2026-start
+            mobility=gnb_mobility
+            # Rashed-Step 5.G-02-06-2026-end
         )
         gnbs.append(g)
         # Rashed-Step pre_5.A-02-06-2026-end

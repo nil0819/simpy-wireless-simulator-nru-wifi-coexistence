@@ -17,6 +17,9 @@ from common.common_phy import mcs_sinr_threshold_db
 from Times import WIFI_MCS_SINR_THRESHOLDS_DB
 from typing import Optional
 # Rashed-Step 5.D-02-06-2026-end
+# Rashed-Step 5.G-02-06-2026-start
+from typing import Any
+# Rashed-Step 5.G-02-06-2026-end
 
 
 
@@ -75,7 +78,10 @@ class WiFi:
             pos: Pos,
             sta_list: list,
             # Rashed-Step 1.C_1-01-12-2026-start
-            config: Config 
+            config: Config,
+            # Rashed-Step 5.G-02-06-2026-start
+            mobility: Optional[Any] = None
+            # Rashed-Step 5.G-02-06-2026-end
     ):
         self.config = config
         self.times = Times(config.data_size, config.mcs)  # using Times script to get time calculations
@@ -101,11 +107,29 @@ class WiFi:
         self.pos = pos
         self.sta_list = sta_list
         # Rashed-Step 1.C_1-01-12-2026-end
+        # Rashed-Step 5.G-02-06-2026-start
+        self.mobility = mobility
+        # Rashed-Step 5.G-02-06-2026-end
 
 
         # Rashed-Step 4.C_2-01-21-2026-start
         self.sinr_print_ctr = 0
         # Rashed-Step 4.C_2-01-21-2026-end
+
+    # Rashed-Step 5.G-02-06-2026-start
+    def current_pos(self) -> Pos:
+        """
+        Current interpolated position if mobility is enabled (see
+        common_phy.WaypointMobility), else the static self.pos - byte-
+        identical to every pre-5.G run when mobility is None (the
+        default). All position reads that matter for CCA/collision
+        physics (is_busy() sensing, tx_pos/rx_pos at actual transmission
+        time) should go through this, not self.pos directly, so a moving
+        AP's sensed/transmitted position is always "now", not "at
+        construction time".
+        """
+        return self.mobility.pos_now() if self.mobility is not None else self.pos
+    # Rashed-Step 5.G-02-06-2026-end
 
     def start(self):
         # Rashed-Step 3.F-12-26-2025-start
@@ -174,7 +198,7 @@ class WiFi:
             # Sensing is now channel-aware: pass this AP's own f_ghz/
             # bandwidth_mhz so energy on a non-overlapping channel doesn't
             # falsely mark the channel busy.
-            if self.channel.is_busy(self.pos, self.config.ed_threshold_dbm, exclude_tx_id=self.name,
+            if self.channel.is_busy(self.current_pos(), self.config.ed_threshold_dbm, exclude_tx_id=self.name,
                                      sense_f_hz=self.config.f_ghz, sense_bw_mhz=self.config.bandwidth_mhz):
             # Rashed-Step 5.E-02-06-2026-end
                 log(self, "Channel busy during DIFS, waiting...")
@@ -186,7 +210,7 @@ class WiFi:
 
         while backoff_slots > 0:
             # Rashed-Step 5.E-02-06-2026-start
-            if self.channel.is_busy(self.pos, self.config.ed_threshold_dbm, exclude_tx_id=self.name,
+            if self.channel.is_busy(self.current_pos(), self.config.ed_threshold_dbm, exclude_tx_id=self.name,
                                      sense_f_hz=self.config.f_ghz, sense_bw_mhz=self.config.bandwidth_mhz):
             # Rashed-Step 5.E-02-06-2026-end
                 log(self, "Channel busy during backoff, waiting...")
@@ -303,10 +327,6 @@ class WiFi:
 
 
     def send_frame(self):
-        # Rashed-Step 4.B_2-01-20-2026-start
-        rx_pos = self.sta_list[0].pos if self.sta_list else self.pos
-        # Rashed-Step 4.B_2-01-20-2026-end
-
     # ONE request only
         with self.channel.tx_queue.request(priority=(big_num - self.frame_to_send.frame_time)) as req:
             yield req
@@ -319,13 +339,23 @@ class WiFi:
             # Rashed-Step 4.D_2-01-28-2026-start
             log(self, f'Starting sending frame: {self.frame_to_send.frame_time}')
             # Rashed-Step 4.D_2-01-28-2026-end
+            # Rashed-Step 5.G-02-06-2026-start
+            # BUGFIX/UPGRADE (Step 5.G, G_2): rx_pos used to be computed
+            # BEFORE the tx_queue.request()/yield above, i.e. at the
+            # moment send_frame() was called, not at actual transmission
+            # start - if this AP had to wait for the queue, a moving STA
+            # could have already moved on by the time tx_start actually
+            # happens. Now computed here, after the wait, from
+            # current_pos() (dynamic if mobility is set, otherwise
+            # identical to the old self.pos/sta.pos read).
             tx_start = self.env.now
+            tx_pos = self.current_pos()
+            rx_pos = self.sta_list[0].current_pos() if self.sta_list else tx_pos
+            # Rashed-Step 5.G-02-06-2026-end
             tx = ActiveTx(
                 tx_id=self.name,
-                tx_pos=self.pos,
-                # Rashed-Step 4.B_2-01-20-2026-start
+                tx_pos=tx_pos,
                 rx_pos=rx_pos,
-                # Rashed-Step 4.B_2-01-20-2026-end
                 tx_start=tx_start,
                 tx_power_dbm=self.config.tx_power_dbm,
                 f_hz=self.config.f_ghz,
@@ -458,11 +488,21 @@ class WiFi:
 
         fr = Frame (frame_length, self.name, self.col, self.config.data_size, self.env.now)
 
-        fr.tx_pos = self.pos
+        # Rashed-Step 5.G-02-06-2026-start
+        # current_pos() instead of self.pos/rx_sta.pos - this is a
+        # diagnostic snapshot only (not used for the actual send_frame()
+        # success decision, which recomputes its own tx_pos/rx_pos fresh
+        # right at transmission time - see send_frame()), but should
+        # still reflect where things actually are *now* if mobility is
+        # enabled, not stale construction-time positions.
+        my_pos = self.current_pos()
+        fr.tx_pos = my_pos
         if rx_sta is not None:
+            rx_pos = rx_sta.current_pos()
             fr.rx_name = rx_sta.name
-            fr.rx_pos = rx_sta.pos
-            fr.distance_m = dist(self.pos, rx_sta.pos)
+            fr.rx_pos = rx_pos
+            fr.distance_m = dist(my_pos, rx_pos)
+            # Rashed-Step 5.G-02-06-2026-end
             # Rashed-Step 5.B-02-06-2026-start
             # Route through channel.shadow_db() so this diagnostic pr_dbm
             # (logged on the Frame, not used for the actual success

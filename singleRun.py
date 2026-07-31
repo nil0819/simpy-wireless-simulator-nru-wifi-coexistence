@@ -96,6 +96,13 @@ def parse_pos_list(raw_values, label: str):
 @click.option("--wifi-tx-power-dbm", "wifi_tx_power_dbm", type=float, default=20.0, help="Wi-Fi tx power (dBm), treated as EIRP directly (no separate antenna-gain model). Checked at startup against the FCC U-NII EIRP cap for --wifi-freq-ghz (warning only, not clamped/enforced). Default (20.0) matches wifi.Config.tx_power_dbm's pre-existing class default - regression-safe.")
 @click.option("--nru-tx-power-dbm", "nru_tx_power_dbm", type=float, default=23.0, help="NR-U tx power (dBm). See --wifi-tx-power-dbm. Default (23.0) matches nru.Config_NR.tx_power_dbm's pre-existing class default - regression-safe (NOT the same default as --wifi-tx-power-dbm, intentionally, to match each config's own prior constant).")
 # Rashed-Step 5.F-02-06-2026-end
+# Rashed-Step 5.G-02-06-2026-start
+@click.option("--ap-mobility-speed-mps", "ap_mobility_speed_mps", type=float, default=0.0, help="AP walking/roaming speed (m/s). 0.0 (default) = static, byte-identical to every pre-5.G run. >0 enables random-waypoint mobility within the [0,area-w]x[0,area-h] box.")
+@click.option("--gnb-mobility-speed-mps", "gnb_mobility_speed_mps", type=float, default=0.0, help="gNB roaming speed (m/s). See --ap-mobility-speed-mps.")
+@click.option("--sta-mobility-speed-mps", "sta_mobility_speed_mps", type=float, default=0.0, help="Wi-Fi STA walking speed (m/s), e.g. ~1.4 for a typical walking pace. See --ap-mobility-speed-mps.")
+@click.option("--ue-mobility-speed-mps", "ue_mobility_speed_mps", type=float, default=0.0, help="NR-U UE walking speed (m/s). See --ap-mobility-speed-mps.")
+@click.option("--mobility-pause-s", "mobility_pause_s", type=float, default=0.0, help="Dwell time (s) at each waypoint before picking the next one, for any node type with mobility enabled. 0.0 (default) = keep moving continuously between waypoints.")
+# Rashed-Step 5.G-02-06-2026-end
 
 def single_run(
         runs: int,
@@ -144,8 +151,15 @@ def single_run(
         # Rashed-Step 5.E-02-06-2026-end
         # Rashed-Step 5.F-02-06-2026-start
         wifi_tx_power_dbm: float,
-        nru_tx_power_dbm: float
+        nru_tx_power_dbm: float,
         # Rashed-Step 5.F-02-06-2026-end
+        # Rashed-Step 5.G-02-06-2026-start
+        ap_mobility_speed_mps: float,
+        gnb_mobility_speed_mps: float,
+        sta_mobility_speed_mps: float,
+        ue_mobility_speed_mps: float,
+        mobility_pause_s: float
+        # Rashed-Step 5.G-02-06-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -195,8 +209,15 @@ def single_run(
                        sta_radius=sta_radius, ue_radius=ue_radius,
                        # Rashed-Step 5.A-02-06-2026-end
                        # Rashed-Step 5.B-02-06-2026-start
-                       shadowing_sigma_db=shadowing_sigma_db
+                       shadowing_sigma_db=shadowing_sigma_db,
                        # Rashed-Step 5.B-02-06-2026-end
+                       # Rashed-Step 5.G-02-06-2026-start
+                       ap_mobility_speed_mps=ap_mobility_speed_mps,
+                       gnb_mobility_speed_mps=gnb_mobility_speed_mps,
+                       sta_mobility_speed_mps=sta_mobility_speed_mps,
+                       ue_mobility_speed_mps=ue_mobility_speed_mps,
+                       mobility_pause_s=mobility_pause_s
+                       # Rashed-Step 5.G-02-06-2026-end
                        )
 
 

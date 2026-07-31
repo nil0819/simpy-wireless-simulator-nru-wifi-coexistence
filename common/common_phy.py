@@ -3,6 +3,9 @@ import math
 import random
 from typing import Tuple, Dict
 from common.common import *
+# Rashed-Step 5.G-02-06-2026-start
+import simpy
+# Rashed-Step 5.G-02-06-2026-end
 
 Pos = Tuple[float, float]
 
@@ -214,3 +217,68 @@ def spectral_overlap_fraction(f1_hz: float, bw1_mhz: float, f2_hz: float, bw2_mh
     overlap_hz = max(0.0, min(hi1, hi2) - max(lo1, lo2))
     return min(1.0, overlap_hz / bw1_hz)
 # Rashed-Step 5.E-02-06-2026-end
+
+# Rashed-Step 5.G-02-06-2026-start
+class WaypointMobility:
+    """
+    Random-waypoint mobility: repeatedly pick a random destination within
+    [0, area_w] x [0, area_h] (the same box rand_pos() uses for initial
+    placement), move toward it at a constant speed_mps, optionally pause
+    pause_s seconds on arrival, then pick a new random destination and
+    repeat indefinitely.
+
+    Positions are computed on demand in pos_now() from self.env.now,
+    rather than kept current by a scheduled SimPy process that ticks
+    every so often - there is no extra per-node-per-tick event overhead
+    for movement (relevant given Step 5.E.1's finding that per-event
+    logging is already the dominant cost in this simulator), and the
+    interpolated position is exact/continuous between waypoints rather
+    than a discrete-time staircase. Each call to pos_now() lazily rolls
+    the internal (start_pos, target, segment_start_time) state forward
+    through however many fully-elapsed travel+pause segments have
+    passed since the last call (normally 0 or 1, since callers query
+    fairly often, but a stale object queried after a long gap in
+    simulated time still resolves correctly).
+
+    Callers that never enable mobility (speed_mps <= 0, checked by the
+    caller before even constructing one of these - see simulation.py)
+    never touch this class at all, so nothing changes for any existing
+    static-position run - this is purely additive.
+    """
+
+    def __init__(self, env: simpy.Environment, area_w: float, area_h: float,
+                 speed_mps: float, pause_s: float, start_pos: Pos):
+        self.env = env
+        self.area_w = area_w
+        self.area_h = area_h
+        self.speed_mps = max(speed_mps, 0.0)
+        self.pause_us = max(pause_s, 0.0) * 1e6
+        self._seg_start_pos = start_pos
+        self._seg_start_us = env.now
+        self._target = rand_pos(area_w, area_h)
+        self._travel_us = self._travel_time_us(start_pos, self._target)
+
+    def _travel_time_us(self, a: Pos, b: Pos) -> float:
+        if self.speed_mps <= 0.0:
+            return 0.0
+        return (dist(a, b) / self.speed_mps) * 1e6
+
+    def pos_now(self) -> Pos:
+        while True:
+            elapsed_us = self.env.now - self._seg_start_us
+            if elapsed_us < self._travel_us:
+                frac = elapsed_us / self._travel_us
+                return (
+                    self._seg_start_pos[0] + frac * (self._target[0] - self._seg_start_pos[0]),
+                    self._seg_start_pos[1] + frac * (self._target[1] - self._seg_start_pos[1]),
+                )
+            if elapsed_us < self._travel_us + self.pause_us:
+                return self._target
+            # This travel+pause segment is fully elapsed - advance to the
+            # next one and re-check (handles pos_now() being called after
+            # a gap spanning multiple segments, e.g. a long idle period).
+            self._seg_start_pos = self._target
+            self._seg_start_us += self._travel_us + self.pause_us
+            self._target = rand_pos(self.area_w, self.area_h)
+            self._travel_us = self._travel_time_us(self._seg_start_pos, self._target)
+# Rashed-Step 5.G-02-06-2026-end
