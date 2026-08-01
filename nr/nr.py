@@ -1,0 +1,346 @@
+# Rashed-Step 6.B-07-31-2026-start
+# Licensed 5G NR (as opposed to nru.py, which is NR-U - unlicensed NR
+# with Cat-4 LBT/energy-detection deferral). The defining realism
+# difference: a licensed operator has exclusive rights to its carrier,
+# so there is NO listen-before-talk here at all - Config_NRL has no
+# ed_threshold_dbm field on purpose. Instead, a gNB runs a slot-by-slot
+# scheduler (round-robin or proportional-fair) that allocates resource
+# blocks across its associated UEs every slot, exactly like a real
+# gNB MAC scheduler. Reuses the same channel.ActiveTx/register_tx/
+# sinr_db machinery NR-U and WiFi already use (tech="NR"), so if two
+# licensed gNBs from the SAME run happen to share spectrum without any
+# inter-cell coordination, they DO interfere with each other - a
+# realistic "co-channel same-operator interference" effect (real
+# networks avoid this via frequency-reuse planning / X2-Xn scheduler
+# coordination, neither of which is modeled here - noted as a
+# simplification, see Step 6.txt).
+
+import math
+import random
+from dataclasses import dataclass, field
+from typing import Dict, Optional, Any, List, Tuple
+
+from common.common import Pos, dist, log, colors
+from channel.channel import ActiveTx
+
+
+# ---------------------------------------------------------------------
+# Numerology (3GPP TS 38.211): subcarrier spacing doubles, slot duration
+# halves, per numerology index mu. FR1 (sub-6 GHz, which licensed 5G NR
+# almost always is for a macro/small-cell deployment) commonly uses
+# mu=0 or mu=1; mu=2/3 exist mostly for FR2 (mmWave) but are included
+# here for completeness since nothing about the scheduler logic below
+# depends on which one is picked.
+# ---------------------------------------------------------------------
+NUMEROLOGY_SCS_KHZ = {0: 15, 1: 30, 2: 60, 3: 120}
+
+
+def slot_duration_us(mu: int) -> float:
+    """Slot duration in microseconds for numerology index mu (3GPP: 1ms / 2^mu)."""
+    return 1000.0 / (2 ** mu)
+
+
+# ---------------------------------------------------------------------
+# Resource-block count per (channel bandwidth, subcarrier spacing).
+# Real values are standardized (3GPP TS 38.101-1 Table 5.3.2-1) - the
+# table below reproduces the common FR1 entries exactly; anything not
+# in the table falls back to a formula-based estimate (usable bandwidth
+# ~= 90% of nominal, after guard bands, divided by RB width = 12 *
+# SCS_khz*1000 Hz) so uncommon bandwidth/SCS combinations still get a
+# sane RB count instead of failing.
+# ---------------------------------------------------------------------
+_RB_TABLE_KHZ15 = {5: 25, 10: 52, 15: 79, 20: 106, 25: 133, 30: 160, 40: 216, 50: 270}
+_RB_TABLE_KHZ30 = {10: 24, 15: 38, 20: 51, 25: 65, 30: 78, 40: 106, 50: 133, 60: 162, 80: 217, 90: 245, 100: 273}
+_RB_TABLE_KHZ60 = {10: 11, 20: 24, 30: 38, 40: 51, 50: 65, 60: 79, 80: 107, 90: 121, 100: 135}
+_RB_TABLES = {15: _RB_TABLE_KHZ15, 30: _RB_TABLE_KHZ30, 60: _RB_TABLE_KHZ60}
+
+
+def resource_block_count(bandwidth_mhz: float, scs_khz: int) -> int:
+    table = _RB_TABLES.get(scs_khz)
+    if table is not None:
+        bw_int = int(round(bandwidth_mhz))
+        if bw_int in table:
+            return table[bw_int]
+    # Fallback: usable bandwidth ~90% of nominal (guard bands), divided
+    # by one RB's width (12 subcarriers * scs_khz).
+    usable_hz = bandwidth_mhz * 1e6 * 0.90
+    rb_width_hz = 12 * scs_khz * 1000.0
+    return max(1, int(usable_hz // rb_width_hz))
+
+
+# ---------------------------------------------------------------------
+# MCS -> (required SINR dB, spectral efficiency bits/s/Hz). Loosely
+# follows the shape of the real 3GPP CQI/MCS tables (TS 38.214 Table
+# 5.2.2.1-2 / 38.213 CQI table) - QPSK at the low end through 64-QAM at
+# the top - but, like WIFI_MCS_SINR_THRESHOLDS_DB and
+# NRU_MCS_SINR_THRESHOLDS_DB elsewhere in this project, these are
+# representative/typical values for a coexistence-simulator PHY
+# abstraction, not vendor- or 3GPP-conformance-tested figures.
+# ---------------------------------------------------------------------
+NR_MCS_TABLE: Dict[int, Tuple[float, float]] = {
+    0: (-6.0, 0.15),
+    1: (-4.0, 0.23),
+    2: (-2.0, 0.38),
+    3: (0.0, 0.60),
+    4: (2.0, 0.88),
+    5: (4.0, 1.18),
+    6: (6.0, 1.48),
+    7: (8.0, 1.91),
+    8: (10.0, 2.41),
+    9: (12.0, 2.73),
+    10: (14.0, 3.32),
+    11: (16.0, 3.90),
+    12: (18.0, 4.52),
+    13: (20.0, 5.12),
+    14: (22.0, 5.55),
+    15: (24.0, 5.89),
+}
+
+
+def select_mcs_for_sinr(sinr_db: float, table: Dict[int, Tuple[float, float]] = NR_MCS_TABLE) -> Optional[int]:
+    """
+    Link adaptation: pick the highest MCS index whose required SINR is
+    still met by the achieved sinr_db. Returns None if even MCS 0 can't
+    be met (transmission fails outright this slot). Unlike WiFi/NR-U
+    (which use one fixed, operator-configured MCS and a pass/fail gate),
+    licensed NR here does real adaptive modulation and coding per slot,
+    per UE - a deliberate scope difference matching the "full scheduler
+    model" this step was asked to build.
+    """
+    best = None
+    for mcs, (req_db, _eff) in table.items():
+        if sinr_db >= req_db:
+            if best is None or mcs > best:
+                best = mcs
+    return best
+
+
+@dataclass()
+class Config_NRL:
+    # Frame/numerology
+    numerology: int = 1  # mu; 30 kHz SCS by default (common FR1 mid-band choice)
+    bandwidth_mhz: float = 100.0  # channel bandwidth used to derive RB count + noise floor
+
+    # Scheduler
+    scheduler: str = "round_robin"  # "round_robin" or "proportional_fair"
+    pf_alpha: float = 0.2  # EMA weight for the proportional-fair average-rate tracker
+
+    # RF / propagation - default frequency is 3.5 GHz (3GPP band n78),
+    # the most common global mid-band licensed 5G NR carrier, deliberately
+    # different from Wi-Fi/NR-U's 5.18 GHz U-NII default so a licensed-NR
+    # run doesn't accidentally co-channel with the unlicensed scenario.
+    tx_power_dbm: float = 30.0  # small-cell/macro downlink EIRP, licensed band
+    f_ghz: float = 3.5e9
+    pl_exp: float = 3.0
+
+    noise_figure_db: float = 7.0
+
+    # NOTE: intentionally no ed_threshold_dbm here - licensed spectrum
+    # means no LBT/CCA deferral. See module docstring.
+
+
+class GnbLicensedNR:
+    def __init__(
+            self,
+            env,
+            name: str,
+            channel,
+            pos: Pos,
+            ue_list: list,
+            config: Config_NRL,
+            mobility: Optional[Any] = None,
+    ):
+        self.env = env
+        self.name = name
+        self.channel = channel
+        self.pos = pos
+        self.ue_list = ue_list
+        self.config = config
+        self.mobility = mobility
+        self.col = random.choice(colors)
+
+        self.scs_khz = NUMEROLOGY_SCS_KHZ[config.numerology]
+        self.slot_us = slot_duration_us(config.numerology)
+        self.total_rbs = resource_block_count(config.bandwidth_mhz, self.scs_khz)
+        self.rb_bandwidth_hz = 12 * self.scs_khz * 1000.0
+
+        # Stats
+        self.succeeded_transmissions = 0
+        self.failed_transmissions = 0
+        self.bits_delivered = 0
+
+        # Round-robin rotation pointer
+        self._rr_pointer = 0
+        # Proportional-fair per-UE average-rate tracker (bits/s), seeded
+        # with a small epsilon so every UE can win at least once early on
+        # instead of a first-slot tie going to whichever UE happens first
+        # in ue_list every time.
+        self._pf_avg_rate: Dict[str, float] = {ue.name: 1.0 for ue in ue_list}
+
+        self.channel.airtime_data_NRL.setdefault(name, 0)
+        self.channel.airtime_control_NRL.setdefault(name, 0)
+
+        env.process(self.start())
+
+    def current_pos(self) -> Pos:
+        return self.mobility.pos_now() if self.mobility is not None else self.pos
+
+    def start(self):
+        while True:
+            yield self.env.process(self.run_one_slot())
+
+    # -------------------------------------------------------------
+    # Scheduling
+    # -------------------------------------------------------------
+    def _round_robin_allocation(self) -> Dict[str, int]:
+        """Equal-share OFDMA: every associated UE gets a slice of the
+        slot's resource blocks, rotating which UE(s) absorb the
+        remainder so nobody is shorted every single slot."""
+        n = len(self.ue_list)
+        if n == 0 or self.total_rbs == 0:
+            return {}
+        base = self.total_rbs // n
+        remainder = self.total_rbs % n
+        alloc = {}
+        for i, ue in enumerate(self.ue_list):
+            rbs = base
+            # Rotate who gets the +1 remainder RB so it averages out.
+            if remainder > 0 and ((i - self._rr_pointer) % n) < remainder:
+                rbs += 1
+            if rbs > 0:
+                alloc[ue.name] = rbs
+        self._rr_pointer = (self._rr_pointer + 1) % n
+        return alloc
+
+    def _trial_sinr_db(self, ue) -> float:
+        """Estimate this UE's SINR *as if* it had the full carrier to
+        itself right now, without registering anything - used purely to
+        rank UEs for scheduling (both PF's priority metric and, if ever
+        needed, admission checks). Reflects real current interference
+        from any other already-registered transmitter (e.g. another
+        licensed-NR gNB reusing the same channel with no coordination).
+        """
+        now = self.env.now
+        trial = ActiveTx(
+            tx_id=self.name,
+            tx_pos=self.current_pos(),
+            tx_start=now,
+            rx_pos=ue.current_pos(),
+            tx_power_dbm=self.config.tx_power_dbm,
+            f_hz=self.config.f_ghz,
+            pl_exp=self.config.pl_exp,
+            t_end=now + self.slot_us,
+            tech="NR",
+            bandwidth_mhz=self.config.bandwidth_mhz,
+            noise_figure_db=self.config.noise_figure_db,
+        )
+        return self.channel.sinr_db(trial)
+
+    def _proportional_fair_allocation(self) -> Dict[str, int]:
+        """Classic PF: priority = instantaneous achievable rate / running
+        average rate. The single highest-priority UE gets the whole
+        slot's resource blocks (matches how PF is usually described/
+        implemented - one winner per scheduling interval), then its
+        average-rate tracker is updated via EMA; everyone else's tracker
+        decays toward 0 for this slot (they got nothing)."""
+        if not self.ue_list or self.total_rbs == 0:
+            return {}
+        best_ue = None
+        best_priority = -math.inf
+        best_inst_rate = 0.0
+        inst_rates = {}
+        for ue in self.ue_list:
+            sinr = self._trial_sinr_db(ue)
+            mcs = select_mcs_for_sinr(sinr)
+            eff = NR_MCS_TABLE[mcs][1] if mcs is not None else 0.0
+            inst_rate = eff * (self.total_rbs * self.rb_bandwidth_hz)
+            inst_rates[ue.name] = inst_rate
+            avg = self._pf_avg_rate.get(ue.name, 1.0)
+            priority = inst_rate / avg if avg > 0 else inst_rate
+            if priority > best_priority:
+                best_priority = priority
+                best_ue = ue
+                best_inst_rate = inst_rate
+
+        alpha = self.config.pf_alpha
+        for ue in self.ue_list:
+            achieved = best_inst_rate if ue is best_ue else 0.0
+            prev = self._pf_avg_rate.get(ue.name, 1.0)
+            self._pf_avg_rate[ue.name] = (1 - alpha) * prev + alpha * achieved
+
+        return {best_ue.name: self.total_rbs} if best_ue is not None else {}
+
+    def _allocate_rbs(self) -> Dict[str, int]:
+        if self.config.scheduler == "proportional_fair":
+            return self._proportional_fair_allocation()
+        return self._round_robin_allocation()
+
+    # -------------------------------------------------------------
+    # One slot: register a transmission per scheduled UE, wait out the
+    # slot, then settle SINR/MCS/throughput for each - mirrors the
+    # try/except BaseException pattern used in wifi.WiFi.send_frame()/
+    # nru.Gnb.send_transmission() (Step 5.I/6.A) so a GeneratorExit at
+    # simulation shutdown doesn't try to yield again mid-cleanup.
+    # -------------------------------------------------------------
+    def run_one_slot(self):
+        alloc = self._allocate_rbs()
+        if not alloc:
+            yield self.env.timeout(self.slot_us)
+            return
+
+        ue_by_name = {ue.name: ue for ue in self.ue_list}
+        now = self.env.now
+        txs: List[Tuple[ActiveTx, int]] = []  # (ActiveTx, rb_count)
+        for ue_name, rb_count in alloc.items():
+            ue = ue_by_name[ue_name]
+            bw_mhz_this_ue = self.config.bandwidth_mhz * (rb_count / self.total_rbs)
+            # Constant power-spectral-density split: this UE's tx power
+            # scales down with its bandwidth share, same as a real gNB
+            # splitting total transmit power across the RBs it's using
+            # (so SINR is roughly independent of RB share - only the
+            # number of RBs, and therefore throughput, changes).
+            tx_power_dbm_this_ue = self.config.tx_power_dbm + 10.0 * math.log10(rb_count / self.total_rbs)
+            tx = ActiveTx(
+                tx_id=self.name,
+                tx_pos=self.current_pos(),
+                tx_start=now,
+                rx_pos=ue.current_pos(),
+                tx_power_dbm=tx_power_dbm_this_ue,
+                f_hz=self.config.f_ghz,
+                pl_exp=self.config.pl_exp,
+                t_end=now + self.slot_us,
+                tech="NR",
+                bandwidth_mhz=bw_mhz_this_ue,
+                noise_figure_db=self.config.noise_figure_db,
+            )
+            self.channel.register_tx(tx)
+            txs.append((tx, rb_count))
+
+        try:
+            yield self.env.timeout(self.slot_us)
+            for tx, rb_count in txs:
+                sinr = self.channel.sinr_db(tx)
+                mcs = select_mcs_for_sinr(sinr)
+                if mcs is not None:
+                    eff = NR_MCS_TABLE[mcs][1]
+                    bits = eff * (rb_count * self.rb_bandwidth_hz) * (self.slot_us / 1e6)
+                    self.sent_completed(bits)
+                    log(self, f"UE {tx.rx_pos} slot OK: SINR={sinr:.2f} dB, MCS={mcs}, RBs={rb_count}, bits={bits:.0f}")
+                else:
+                    self.sent_failed()
+                    log(self, f"UE {tx.rx_pos} slot FAILED: SINR={sinr:.2f} dB below MCS0 threshold")
+                self.channel.unregister_tx(tx, success=(mcs is not None))
+        except BaseException:
+            for tx, _rb_count in txs:
+                self.channel.unregister_tx(tx, success=False)
+            raise
+
+    def sent_completed(self, bits: float):
+        self.channel.succeeded_transmissions_NRL += 1
+        self.succeeded_transmissions += 1
+        self.bits_delivered += bits
+
+    def sent_failed(self):
+        self.channel.failed_transmissions_NRL += 1
+        self.failed_transmissions += 1
+# Rashed-Step 6.B-07-31-2026-end

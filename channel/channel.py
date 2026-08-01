@@ -27,7 +27,7 @@ class ActiveTx:
     f_hz: float
     pl_exp: float
     t_end: int
-    tech: str  # "WiFi" or "NRU"
+    tech: str  # "WiFi", "NRU", or "NR" (licensed, Step 6.B)
     # Rashed-Step 5.C-02-06-2026-start
     # Receiver-side noise params for this link, used to derive the SINR
     # noise floor (see common_phy.thermal_noise_dbm). Defaults (20 MHz,
@@ -80,6 +80,18 @@ class Channel:
     bytes_sent: int = 0  # total bytes sent
     failed_transmissions_NR: int = 0  # total failed transmissions
     succeeded_transmissions_NR: int = 0  # total succeeded transmissions
+
+    # Rashed-Step 6.B-07-31-2026-start
+    # Licensed 5G NR (as opposed to NR-U, unlicensed) - separate counters/
+    # airtime dicts so its stats never get mixed up with NR-U's. All have
+    # defaults so simulation.py's Channel(...) call and the standalone
+    # test/*.py files (which construct Channel directly, without knowing
+    # about licensed NR at all) don't need to change.
+    failed_transmissions_NRL: int = 0
+    succeeded_transmissions_NRL: int = 0
+    airtime_data_NRL: Dict[str, int] = field(default_factory=dict)
+    airtime_control_NRL: Dict[str, int] = field(default_factory=dict)
+    # Rashed-Step 6.B-07-31-2026-end
 
 
     # Rashed-Step 3.B-01-12-2026-start
@@ -159,6 +171,10 @@ class Channel:
 
                   elif tx.tech == "NRU":
                         self.airtime_data_NR[tx.tx_id] = self.airtime_data_NR.get(tx.tx_id, 0) + dur
+                  # Rashed-Step 6.B-07-31-2026-start
+                  elif tx.tech == "NR":
+                        self.airtime_data_NRL[tx.tx_id] = self.airtime_data_NRL.get(tx.tx_id, 0) + dur
+                  # Rashed-Step 6.B-07-31-2026-end
               # Rashed-Step 5.1-02-06-2026-end
               self._pulse_state_changed()
         #  if tx in self.active_txs:
