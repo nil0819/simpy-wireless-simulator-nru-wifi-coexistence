@@ -159,27 +159,40 @@ class Channel:
     # airtime is only recorded when the transmission actually succeeded.
     def unregister_tx(self, tx: ActiveTx, success: bool = True):
     # Rashed-Step 5.1-02-06-2026-end
+    # Rashed-Step 6.C-08-05-2026-start
+    # BUGFIX: this used to gate the ENTIRE airtime-recording block below
+    # behind `if tx in self.active_txs`. But sensed_energy_dbm() (called
+    # by every node's is_busy() sensing, from ANY technology sharing the
+    # channel) prunes any ActiveTx past its t_end out of active_txs as a
+    # side effect - if some OTHER node's sensing call happened to prune
+    # this tx before its OWN owner got a chance to call unregister_tx()
+    # on it, the old code would silently skip recording airtime for it
+    # entirely, even though it still counted as a success (sent_completed()
+    # isn't gated on active_txs membership, so the success counter and
+    # the airtime bookkeeping could go out of sync). Confirmed happening
+    # for real: 4 of 14 NR-U successes in a mixed WiFi+NR-U run lost
+    # their airtime this way (see "Project details/Step 6.txt", "BUG
+    # FOUND WHILE VERIFYING"). Fixed by computing dur/recording airtime
+    # unconditionally from the tx object itself - it's self-contained
+    # (t_start/t_end don't stop being valid just because another
+    # process's sensing call already evicted it from active_txs) - only
+    # the actual list removal still needs the membership check, to avoid
+    # a ValueError on an already-pruned entry.
          if tx in self.active_txs:
               self.active_txs.remove(tx)
 
-              dur = max(0, tx.t_end - tx.tx_start)
+         dur = max(0, tx.t_end - tx.tx_start)
 
-              # Rashed-Step 5.1-02-06-2026-start
-              if success:
-                  if tx.tech == "WiFi":
-                       self.airtime_data[tx.tx_id] = self.airtime_data.get(tx.tx_id, 0) + dur
+         if success:
+             if tx.tech == "WiFi":
+                  self.airtime_data[tx.tx_id] = self.airtime_data.get(tx.tx_id, 0) + dur
+             elif tx.tech == "NRU":
+                  self.airtime_data_NR[tx.tx_id] = self.airtime_data_NR.get(tx.tx_id, 0) + dur
+             elif tx.tech == "NR":
+                  self.airtime_data_NRL[tx.tx_id] = self.airtime_data_NRL.get(tx.tx_id, 0) + dur
 
-                  elif tx.tech == "NRU":
-                        self.airtime_data_NR[tx.tx_id] = self.airtime_data_NR.get(tx.tx_id, 0) + dur
-                  # Rashed-Step 6.B-07-31-2026-start
-                  elif tx.tech == "NR":
-                        self.airtime_data_NRL[tx.tx_id] = self.airtime_data_NRL.get(tx.tx_id, 0) + dur
-                  # Rashed-Step 6.B-07-31-2026-end
-              # Rashed-Step 5.1-02-06-2026-end
-              self._pulse_state_changed()
-        #  if tx in self.active_txs:
-        #      self.active_txs.remove(tx)
-        #      self._pulse_state_changed()
+         self._pulse_state_changed()
+    # Rashed-Step 6.C-08-05-2026-end
 
     # Rashed-Step 3.F-01-13-2026-end
 
