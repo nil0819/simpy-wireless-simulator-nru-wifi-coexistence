@@ -309,7 +309,18 @@ def run_simulation(
         check_eirp_compliance("NR-U", configNr.tx_power_dbm, configNr.f_ghz)
     # Rashed-Step 5.F-02-06-2026-end
 
-    config_nr = Config_NR()
+    # Rashed-Step 6.E-08-05-2026-start
+    # BUGFIX: this used to be `config_nr = Config_NR()` - a fresh, always-
+    # default Config_NR object, disconnected from `configNr` (the real
+    # config actually used to build the Gnb objects below, populated from
+    # CLI flags like --nru_cw_min/--nru_cw_max). It was only ever read for
+    # the "CW_MIN=/CW_MAX=" diagnostic print further down, so that print
+    # always showed 15/63 regardless of the real --nru_cw_min/--nru_cw_max
+    # values passed in - misleading, though the real simulation logic
+    # (which uses configNr throughout) was never affected. Found during
+    # Step 6.D/6.E regression testing. Point the print at the real object.
+    config_nr = configNr
+    # Rashed-Step 6.E-08-05-2026-end
 
     # Rashed-Step 1.E-12-26-2025-start
     # for i in range(1, number_of_stations + 1):
@@ -333,20 +344,27 @@ def run_simulation(
     # Rashed-Step 3.F-12-26-2025-start
     # print("APs: ", [ap.name for ap in wifi_aps])
     # print("GNBs: ", [g.name for g in gnbs])
+    # Rashed-Step 3.F-12-26-2025-end
 
+    # environment.run(until=simulation_time * 1000000) 10^6 milisekundy
+    environment.run(until=simulation_time * 1000000)
+
+    # Rashed-Step 6.E-08-05-2026-start
+    # BUGFIX: this "WiFi airtime data:.../NRU airtime ctrl:" debug print
+    # block used to sit BEFORE environment.run() (i.e. before the
+    # simulation actually executed), so it always printed all-zero
+    # airtime/succ/fail regardless of what really happened - misleading
+    # debug output (channel.airtime_data etc. are only ever populated as
+    # a side effect of the simulation running). Moved here, right after
+    # environment.run(), so it reflects real post-simulation state.
+    # Found during Step 6.D/6.E regression testing.
     print("WiFi airtime data:", sum(channel.airtime_data.values()))
     print("WiFi airtime ctrl:", sum(channel.airtime_control.values()))
     print("NRU airtime data:", sum(channel.airtime_data_NR.values()))
     print("NRU airtime ctrl:", sum(channel.airtime_control_NR.values()))
     print("succ WiFi:", channel.succeeded_transmissions, "fail WiFi:", channel.failed_transmissions)
     print("succ NRU:", channel.succeeded_transmissions_NR, "fail NRU:", channel.failed_transmissions_NR)
-
-
-    # Rashed-Step 3.F-12-26-2025-end   
-
-
-    # environment.run(until=simulation_time * 1000000) 10^6 milisekundy
-    environment.run(until=simulation_time * 1000000)
+    # Rashed-Step 6.E-08-05-2026-end
 
     if number_of_stations != 0:
         if(channel.failed_transmissions + channel.succeeded_transmissions) != 0:
