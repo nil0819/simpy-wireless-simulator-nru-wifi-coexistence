@@ -198,14 +198,19 @@ class Gnb:
         # Rashed-Step 8.D-08-06-2026-start
         # The packet currently "in flight" for this episode (set at the
         # top of start()'s outer loop, re-read fresh by start()'s inner
-        # retry loop every attempt). sent_failed() mutates this IN PLACE
-        # when the retry limit is exceeded, so the next attempt picks up
-        # the replacement packet automatically - mirrors how
-        # wifi.WiFi.sent_failed() swaps self.frame_to_send in place (see
-        # that method) rather than relying on a stale local variable
-        # captured once per episode.
+        # retry loop every attempt, instead of a stale local `packet`
+        # variable captured once per episode). When the retry limit is
+        # exceeded, start()'s inner loop (see Step 8.E below) replaces
+        # this with a fresh packet before the next attempt.
         self.current_packet = None
         # Rashed-Step 8.D-08-06-2026-end
+        # Rashed-Step 8.E-08-06-2026-start
+        # Same deferred-replacement flag as wifi.WiFi - see that class's
+        # __init__ comment and sent_failed() for the full rationale
+        # (avoids blocking mid-transmission-teardown; the actual queue
+        # wait happens in start()'s inner retry loop instead).
+        self._need_new_packet = False
+        # Rashed-Step 8.E-08-06-2026-end
 
         env.process(self.start())  # starting simulation process
         env.process(self.sync_slot_counter())
@@ -310,18 +315,29 @@ class Gnb:
             # improvement, not just packet bookkeeping).
             packet = yield from self._next_packet()
             # Rashed-Step 8.D-08-06-2026-start
-            # Stashed on self (not just the local `packet` var) so
-            # sent_failed() can swap in a replacement packet in place
-            # when the retry limit is exceeded - see current_packet's
-            # __init__ comment. The inner loop below reads
+            # Stashed on self (not just the local `packet` var) so a
+            # mid-episode replacement (see Step 8.E below) is picked up
+            # immediately on the very next retry - the inner loop reads
             # self.current_packet fresh every attempt instead of the
-            # stale `packet` local, so a mid-episode swap is picked up
-            # immediately on the very next retry.
+            # stale `packet` local.
             self.current_packet = packet
             # Rashed-Step 8.D-08-06-2026-end
             # Rashed-Step 8.B-08-06-2026-end
             was_sent = False
             while not was_sent:
+                # Rashed-Step 8.E-08-06-2026-start
+                # sent_failed() sets self._need_new_packet instead of
+                # synthesizing a replacement directly (see its comment
+                # for why - avoids blocking mid-teardown of the attempt
+                # that just failed). Checked at the top of every retry:
+                # saturated mode returns instantly (no change), poisson/
+                # cbr mode genuinely waits here for the queue, AFTER
+                # send_transmission()'s previous call has already fully
+                # finished its own bookkeeping.
+                if self._need_new_packet:
+                    self.current_packet = yield from self._next_packet()
+                    self._need_new_packet = False
+                # Rashed-Step 8.E-08-06-2026-end
                 if gap:
                     # Rashed-Step 3.E_2-01-12-2026-start
                     #self.process = self.env.process(self.wait_back_off_gap())
@@ -861,15 +877,27 @@ class Gnb:
         if (self.transmission_to_send.packet is not None
                 and self.transmission_to_send.packet.retry_count > self.config_nr.r_limit):
             self.transmission_to_send.packet.status = "DROPPED"
-            # Build the replacement packet and stash it where start()'s
-            # inner retry loop will pick it up on the very next attempt
-            # (self.current_packet - see its __init__ comment). This is
-            # the same "synthesize immediately via _make_packet()"
-            # simplification wifi.WiFi.sent_failed() uses (not routed
-            # through the queue even in poisson/cbr mode) - see Step
-            # 8.txt for why, and Step 8.E for the follow-up that closes
-            # this gap for both technologies.
-            self.current_packet = self._make_packet()
+            # Rashed-Step 8.E-08-06-2026-start
+            # UPGRADE: used to synthesize the replacement immediately via
+            # _make_packet() right here unconditionally, even in
+            # poisson/cbr mode (same simplification wifi.WiFi.
+            # sent_failed() had). Mirrors wifi.WiFi.sent_failed()'s split:
+            # saturated mode keeps the exact old inline behavior
+            # (_make_packet() has no randomness of its own for NR-U, so
+            # this split isn't strictly required for byte-identical
+            # output the way it IS for WiFi's generate_new_frame() - see
+            # that method's comment - but kept symmetric/defensive
+            # anyway, so a future change to _make_packet() can't
+            # silently reintroduce the same class of reordering bug).
+            # poisson/cbr mode defers to start()'s inner loop instead,
+            # which genuinely blocks on the queue via _next_packet(),
+            # AFTER send_transmission() has fully finished this attempt's
+            # own bookkeeping (unregister_tx, etc.) - not from inside it.
+            if self.traffic_config.mode == "saturated":
+                self.current_packet = self._make_packet()
+            else:
+                self._need_new_packet = True
+            # Rashed-Step 8.E-08-06-2026-end
             self.failed_transmissions_in_row = 0
         # Rashed-Step 8.D-08-06-2026-end
 

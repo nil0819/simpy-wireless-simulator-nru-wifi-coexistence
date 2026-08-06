@@ -123,6 +123,15 @@ class WiFi:
             env.process(self._traffic_generator())
         # Rashed-Step 8.B-08-06-2026-end
 
+        # Rashed-Step 8.E-08-06-2026-start
+        # Set by sent_failed() when the retry limit is exceeded; consumed
+        # by start()'s inner retry loop, which then blocks on
+        # _next_packet() for a real replacement before contending for
+        # the channel again. See sent_failed()'s comment for why this is
+        # a flag instead of sent_failed() blocking directly.
+        self._need_new_packet = False
+        # Rashed-Step 8.E-08-06-2026-end
+
         env.process(self.start())  # starting simulation process
         self.process = None  # waiting back off process
         self.channel.airtime_data.update({name: 0})
@@ -243,6 +252,31 @@ class WiFi:
             # Rashed-Step 8.B-08-06-2026-end
             was_sent = False
             while not was_sent:
+                # Rashed-Step 8.E-08-06-2026-start
+                # UPGRADE: sent_failed() (called inside the send_frame()
+                # attempt below) sets this flag instead of directly
+                # synthesizing a replacement packet when the retry limit
+                # is exceeded. Checked at the top of every retry attempt
+                # (not just once per episode) - this is exactly the
+                # point, analogous to _next_packet() at the top of the
+                # outer loop, where it's safe to block: send_frame() has
+                # already fully finished the PREVIOUS attempt's own
+                # bookkeeping (unregister_tx, ACK-timeout wait) before
+                # returning was_sent=False, so waiting here for a new
+                # packet doesn't delay that unrelated teardown. Saturated
+                # mode: still a same-tick, non-blocking call. Poisson/
+                # cbr mode: this AP now genuinely sits idle here, not
+                # contending for the channel, until its queue actually
+                # produces a replacement - closing the simplification
+                # documented in Step 8.B/8.C where the replacement was
+                # always synthesized immediately regardless of traffic
+                # mode.
+                if self._need_new_packet:
+                    new_packet = yield from self._next_packet()
+                    self.frame_to_send = self.generate_new_frame(new_packet)
+                    self.frame_to_send.packet = new_packet
+                    self._need_new_packet = False
+                # Rashed-Step 8.E-08-06-2026-end
                 self.process = self.env.process(self.wait_back_off())
                 yield self.process
                 # self.process = None
@@ -702,24 +736,50 @@ class WiFi:
             # UPGRADE: the old packet gave up on/exceeded its retry
             # limit here and used to just vanish with no record beyond
             # the aggregate failed_transmissions counter. Now marked
-            # DROPPED before being replaced. The replacement packet is
-            # synthesized immediately (self._make_packet(), NOT routed
-            # through _next_packet()/the queue) even in poisson/cbr
-            # mode - a deliberate simplification for this first cut
-            # (documented in Step 8.txt): genuinely blocking here too
-            # would require sent_failed() to become a SimPy process
-            # itself, a bigger structural change deferred to a later
-            # sub-step if this corner case turns out to matter.
+            # DROPPED before being replaced.
+            # Rashed-Step 8.B-08-06-2026-end
             if self.frame_to_send.packet is not None:
                 self.frame_to_send.packet.status = "DROPPED"
-            # Rashed-Step 8.C-08-06-2026: build the replacement packet
-            # FIRST so generate_new_frame() can size the new frame's
-            # duration off its actual payload_bytes, instead of always
-            # falling back to config.data_size.
-            new_packet = self._make_packet()
-            self.frame_to_send = self.generate_new_frame(new_packet)
-            self.frame_to_send.packet = new_packet
-            # Rashed-Step 8.B-08-06-2026-end
+            # Rashed-Step 8.E-08-06-2026-start
+            # UPGRADE: saturated mode (the default) keeps the EXACT old
+            # inline behavior - build the replacement frame/packet right
+            # here, synchronously, byte-identical to every pre-8.E run.
+            # This matters beyond just "no blocking": generate_new_frame()
+            # calls random.choice(self.sta_list), and moving that call to
+            # a different point in this generator's yield sequence (even
+            # one that doesn't itself consume simulated time) shifts its
+            # position relative to OTHER processes' events at the same
+            # simulated instant, which cascades into a different random-
+            # draw ordering downstream - confirmed empirically: an
+            # earlier version of this fix that unconditionally deferred
+            # to start()'s inner loop reproduced the mixed WiFi+NR-U and
+            # NR-U-only baselines exactly, but shifted the WiFi-only N=5
+            # collision baseline (PCOLL 0.6438->0.6462, a different but
+            # equally valid run, not a bug - same class of divergence
+            # documented in Step 8.D) even with r_limit at its DEFAULT
+            # value and no new CLI flags set at all. That violated this
+            # project's "no new flags -> byte-identical" convention, so
+            # only poisson/cbr mode (a genuinely new code path with no
+            # pre-8.E baseline to preserve) defers to the queue; saturated
+            # mode is untouched.
+            if self.traffic_config.mode == "saturated":
+                new_packet = self._make_packet()
+                self.frame_to_send = self.generate_new_frame(new_packet)
+                self.frame_to_send.packet = new_packet
+            else:
+                # This method stays SYNCHRONOUS (not a generator) even
+                # for this branch - it's called from deep inside
+                # send_frame()'s try block, BEFORE that transmission's
+                # own housekeeping (unregister_tx, the ACK-timeout wait)
+                # has run. Blocking here to wait on the queue would delay
+                # that unrelated bookkeeping. Instead, just flag that a
+                # fresh packet is needed and let start()'s inner retry
+                # loop pick it up via _next_packet() - genuinely blocking,
+                # but only AFTER send_frame() has fully finished this
+                # attempt and returned. See start() for where the flag is
+                # consumed.
+                self._need_new_packet = True
+            # Rashed-Step 8.E-08-06-2026-end
             self.failed_transmissions_in_row = 0
 
     def sent_completed(self):
