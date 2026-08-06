@@ -1,4 +1,5 @@
 import math
+from typing import Optional
 
 MCS = {
     0: [6, 6],
@@ -70,8 +71,18 @@ class Times:
         self.ofdm_signal = 24 / self.ctr_rate  # [us]
 
     # Data frame time
-    def get_ppdu_frame_time(self):
-        msdu = self.payload * 8  # [b]
+    # Rashed-Step 8.C-08-06-2026-start
+    # UPGRADE: added an optional payload_bytes override so a caller can
+    # get the PPDU duration for a SPECIFIC packet's payload size without
+    # constructing a whole new Times object (mcs stays fixed per-node;
+    # only the payload varies per-packet). Defaults to self.payload (the
+    # value Times() was constructed with) when omitted, so every
+    # pre-existing no-arg call site (rogue AP/jammer/selfbackoff files,
+    # any test) is byte-identical to before this change.
+    def get_ppdu_frame_time(self, payload_bytes: Optional[int] = None):
+        payload = payload_bytes if payload_bytes is not None else self.payload
+        msdu = payload * 8  # [b]
+    # Rashed-Step 8.C-08-06-2026-end
         # MacFrame
         mac_frame = Times.mac_overhead + msdu  # [b]
         # PPDU Padding

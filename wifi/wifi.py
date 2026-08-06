@@ -235,7 +235,10 @@ class WiFi:
             # AP now genuinely waits here, not contending for the
             # channel at all, until it actually has something to send.
             packet = yield from self._next_packet()
-            self.frame_to_send = self.generate_new_frame()
+            # Rashed-Step 8.C-08-06-2026: pass packet through so frame
+            # duration reflects its actual payload_bytes (see
+            # generate_new_frame()'s docstring/comment).
+            self.frame_to_send = self.generate_new_frame(packet)
             self.frame_to_send.packet = packet
             # Rashed-Step 8.B-08-06-2026-end
             was_sent = False
@@ -607,20 +610,35 @@ class WiFi:
 
     # Rashed-Step 3.D-12-26-2025-end
 
-    def generate_new_frame(self):
+    def generate_new_frame(self, packet: Optional[Packet] = None):
         # Rashed-Step pre_5.C-02-06-2026-start
         # BUGFIX: frame duration was hardcoded to 5400us, so config.mcs had
         # zero effect on airtime or on the SINR window used for capture.
         # Times.get_ppdu_frame_time() already derives duration from
         # payload size + MCS - re-enabled it.
-        frame_length = self.times.get_ppdu_frame_time()
+        # Rashed-Step 8.C-08-06-2026-start
+        # UPGRADE: duration (and the reported data_size) now come from
+        # the actual dequeued Packet's payload_bytes when one is passed
+        # in, instead of always assuming self.config.data_size. packet
+        # is None only for legacy/defensive call sites (there are none
+        # left in wifi.py itself as of this change, but keeping the
+        # default keeps this method safely callable standalone, e.g.
+        # from a test) - falls back to config.data_size, which is
+        # exactly the old behavior. Note: pass packet.payload_bytes, NOT
+        # packet.total_bytes() - Times.get_ppdu_frame_time() already
+        # adds the MAC header (Times.mac_overhead) internally, so
+        # total_bytes() would double-count the header that
+        # _make_packet() derived from that same constant.
+        payload_bytes = packet.payload_bytes if packet is not None else self.config.data_size
+        frame_length = self.times.get_ppdu_frame_time(payload_bytes)
+        # Rashed-Step 8.C-08-06-2026-end
         # Rashed-Step pre_5.C-02-06-2026-end
 
         # Rashed-Step 2.D_1-01-08-2026-start
 
         rx_sta = random.choice(self.sta_list) if self.sta_list else None
 
-        fr = Frame (frame_length, self.name, self.col, self.config.data_size, self.env.now)
+        fr = Frame (frame_length, self.name, self.col, payload_bytes, self.env.now)
 
         # Rashed-Step 5.G-02-06-2026-start
         # current_pos() instead of self.pos/rx_sta.pos - this is a
@@ -694,8 +712,13 @@ class WiFi:
             # sub-step if this corner case turns out to matter.
             if self.frame_to_send.packet is not None:
                 self.frame_to_send.packet.status = "DROPPED"
-            self.frame_to_send = self.generate_new_frame()
-            self.frame_to_send.packet = self._make_packet()
+            # Rashed-Step 8.C-08-06-2026: build the replacement packet
+            # FIRST so generate_new_frame() can size the new frame's
+            # duration off its actual payload_bytes, instead of always
+            # falling back to config.data_size.
+            new_packet = self._make_packet()
+            self.frame_to_send = self.generate_new_frame(new_packet)
+            self.frame_to_send.packet = new_packet
             # Rashed-Step 8.B-08-06-2026-end
             self.failed_transmissions_in_row = 0
 

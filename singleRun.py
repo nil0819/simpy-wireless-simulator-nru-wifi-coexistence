@@ -109,6 +109,10 @@ def parse_pos_list(raw_values, label: str):
 @click.option("--nru-traffic-model", "nru_traffic_model", type=click.Choice(["saturated", "poisson", "cbr"]), default="saturated", help="NR-U traffic arrival model. See --wifi-traffic-model.")
 @click.option("--nru-arrival-rate-pps", "nru_arrival_rate_pps", type=float, default=100.0, help="NR-U packet arrival rate (packets/sec), used only when --nru-traffic-model is poisson or cbr.")
 # Rashed-Step 8.B-08-06-2026-end
+# Rashed-Step 8.C-08-06-2026-start
+@click.option("--wifi-packet-size-bytes", "wifi_packet_size_bytes", type=int, default=None, help="Override Wi-Fi packet payload size (bytes). Default (unset/None) = each AP's --mcs-value-controlled config.data_size (1472B), byte-identical to every pre-Step-8.C run. When set, this size now genuinely drives the PPDU on-air duration (Times.get_ppdu_frame_time()), not just a label.")
+@click.option("--nru-packet-size-bytes", "nru_packet_size_bytes", type=int, default=None, help="Override NR-U packet payload size (bytes). Default (unset/None) = 1500B placeholder. NOTE: unlike Wi-Fi, this does NOT affect NR-U's on-air duration - NR-U's Transmission_NR duration stays purely mcot-based (real 3GPP Category-4 LBT channel-occupancy semantics), so this only affects the Packet bookkeeping (payload_bytes/total_bytes()), not timing. See Project details/Step 8.txt.")
+# Rashed-Step 8.C-08-06-2026-end
 
 def single_run(
         runs: int,
@@ -170,8 +174,12 @@ def single_run(
         wifi_traffic_model: str,
         wifi_arrival_rate_pps: float,
         nru_traffic_model: str,
-        nru_arrival_rate_pps: float
+        nru_arrival_rate_pps: float,
         # Rashed-Step 8.B-08-06-2026-end
+        # Rashed-Step 8.C-08-06-2026-start
+        wifi_packet_size_bytes: int,
+        nru_packet_size_bytes: int
+        # Rashed-Step 8.C-08-06-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -185,8 +193,11 @@ def single_run(
     # Rashed-Step 5.A-02-06-2026-end
 
     # Rashed-Step 8.B-08-06-2026-start
-    wifi_traffic_config = TrafficConfig(mode=wifi_traffic_model, arrival_rate_pps=wifi_arrival_rate_pps)
-    nru_traffic_config = TrafficConfig(mode=nru_traffic_model, arrival_rate_pps=nru_arrival_rate_pps)
+    # Rashed-Step 8.C-08-06-2026: added packet_size_bytes=... (defaults
+    # to None, matching TrafficConfig's own default - unset means "use
+    # the node's own built-in default size", exactly as before).
+    wifi_traffic_config = TrafficConfig(mode=wifi_traffic_model, arrival_rate_pps=wifi_arrival_rate_pps, packet_size_bytes=wifi_packet_size_bytes)
+    nru_traffic_config = TrafficConfig(mode=nru_traffic_model, arrival_rate_pps=nru_arrival_rate_pps, packet_size_bytes=nru_packet_size_bytes)
     # Rashed-Step 8.B-08-06-2026-end
 
     for i in range(0, runs):
