@@ -212,6 +212,14 @@ class Gnb:
         self._need_new_packet = False
         # Rashed-Step 8.E-08-06-2026-end
 
+        # Rashed-Step 8.G-08-06-2026-start
+        # Every DATA packet this gNB has finished with (DELIVERED or
+        # DROPPED - never PENDING), appended by sent_completed()/
+        # sent_failed(). See wifi.WiFi's matching field for the full
+        # rationale - feeds common.packet.compute_packet_stats().
+        self.packet_log = []
+        # Rashed-Step 8.G-08-06-2026-end
+
         env.process(self.start())  # starting simulation process
         env.process(self.sync_slot_counter())
         self.process = None  # waiting back off process
@@ -877,6 +885,9 @@ class Gnb:
         if (self.transmission_to_send.packet is not None
                 and self.transmission_to_send.packet.retry_count > self.config_nr.r_limit):
             self.transmission_to_send.packet.status = "DROPPED"
+            # Rashed-Step 8.G-08-06-2026-start
+            self.packet_log.append(self.transmission_to_send.packet)
+            # Rashed-Step 8.G-08-06-2026-end
             # Rashed-Step 8.E-08-06-2026-start
             # UPGRADE: used to synthesize the replacement immediately via
             # _make_packet() right here unconditionally, even in
@@ -913,6 +924,9 @@ class Gnb:
         if self.transmission_to_send.packet is not None:
             self.transmission_to_send.packet.status = "DELIVERED"
             self.transmission_to_send.packet.delivered_at = self.env.now
+            # Rashed-Step 8.G-08-06-2026-start
+            self.packet_log.append(self.transmission_to_send.packet)
+            # Rashed-Step 8.G-08-06-2026-end
         # Rashed-Step 8.B-08-06-2026-end
         return True
 

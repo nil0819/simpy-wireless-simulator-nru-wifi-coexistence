@@ -18,6 +18,9 @@ from common.common_phy import check_eirp_compliance
 # Rashed-Step 5.G-02-06-2026-start
 from common.common_phy import WaypointMobility
 # Rashed-Step 5.G-02-06-2026-end
+# Rashed-Step 8.G-08-06-2026-start
+from common.packet import compute_packet_stats
+# Rashed-Step 8.G-08-06-2026-end
 
 
 # Rashed-Step 1.D_2-12-26-2025-start
@@ -378,6 +381,29 @@ def run_simulation(
     print("succ WiFi:", channel.succeeded_transmissions, "fail WiFi:", channel.failed_transmissions)
     print("succ NRU:", channel.succeeded_transmissions_NR, "fail NRU:", channel.failed_transmissions_NR)
     # Rashed-Step 6.E-08-05-2026-end
+
+    # Rashed-Step 8.G-08-06-2026-start
+    # Per-packet latency/loss report, built from each AP's/gNB's
+    # packet_log (populated by sent_completed()/sent_failed() - see
+    # wifi.WiFi/nru.Gnb and common.packet.compute_packet_stats()). This
+    # is a genuinely different signal from PCOLL/succ/fail above: those
+    # count TRANSMISSION ATTEMPTS (every retry counts separately);
+    # this counts PACKETS (one entry per packet's final DELIVERED/
+    # DROPPED outcome, however many attempts it took to get there), and
+    # adds latency (created_at -> delivered_at), which nothing else in
+    # this print block reports at all.
+    # getattr(..., []) instead of ap.packet_log directly: when --rogue
+    # True, wifi_aps holds RogueWiFiCAD instances instead of WiFi ones
+    # (attacker/roguewificad.py - out of scope for Step 8's packet work
+    # per standing project convention, never given a packet_log). This
+    # just skips those rather than erroring, without touching that file.
+    wifi_packets = [p for ap in wifi_aps for p in getattr(ap, "packet_log", [])]
+    nru_packets = [p for g in gnbs for p in g.packet_log]
+    wifi_pkt_stats = compute_packet_stats(wifi_packets)
+    nru_pkt_stats = compute_packet_stats(nru_packets)
+    print("packet stats WiFi:", wifi_pkt_stats)
+    print("packet stats NRU:", nru_pkt_stats)
+    # Rashed-Step 8.G-08-06-2026-end
 
     if number_of_stations != 0:
         if(channel.failed_transmissions + channel.succeeded_transmissions) != 0:

@@ -138,6 +138,19 @@ class WiFi:
         self._need_new_packet = False
         # Rashed-Step 8.E-08-06-2026-end
 
+        # Rashed-Step 8.G-08-06-2026-start
+        # Every DATA packet this AP has finished with (DELIVERED or
+        # DROPPED - never PENDING), appended by sent_completed()/
+        # sent_failed(). Feeds common.packet.compute_packet_stats() for
+        # the latency/loss report printed at the end of simulation.py's
+        # run_simulation(). Note: this keeps every such Packet object
+        # alive for the whole run (a real, if modest, memory cost on
+        # very long/high-rate runs) - acceptable for this simulator's
+        # scale; a future step could cap/roll this off if it ever
+        # matters.
+        self.packet_log = []
+        # Rashed-Step 8.G-08-06-2026-end
+
         env.process(self.start())  # starting simulation process
         self.process = None  # waiting back off process
         self.channel.airtime_data.update({name: 0})
@@ -784,6 +797,9 @@ class WiFi:
             # Rashed-Step 8.B-08-06-2026-end
             if self.frame_to_send.packet is not None:
                 self.frame_to_send.packet.status = "DROPPED"
+                # Rashed-Step 8.G-08-06-2026-start
+                self.packet_log.append(self.frame_to_send.packet)
+                # Rashed-Step 8.G-08-06-2026-end
             # Rashed-Step 8.E-08-06-2026-start
             # UPGRADE: saturated mode (the default) keeps the EXACT old
             # inline behavior - build the replacement frame/packet right
@@ -838,6 +854,9 @@ class WiFi:
         if self.frame_to_send.packet is not None:
             self.frame_to_send.packet.status = "DELIVERED"
             self.frame_to_send.packet.delivered_at = self.env.now
+            # Rashed-Step 8.G-08-06-2026-start
+            self.packet_log.append(self.frame_to_send.packet)
+            # Rashed-Step 8.G-08-06-2026-end
         # Rashed-Step 8.B-08-06-2026-end
         # Rashed-Step 8.F-08-06-2026-start
         # Construct the ACK packet now (data delivery just confirmed) -

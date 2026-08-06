@@ -92,3 +92,43 @@ class TrafficConfig:
     # node's main Config/Config_NR object.
     packet_size_bytes: Optional[int] = None
 # Rashed-Step 8.A-08-06-2026-end
+
+
+# Rashed-Step 8.G-08-06-2026-start
+def compute_packet_stats(packets: "list[Packet]") -> dict:
+    """
+    Aggregate latency/loss stats over a list of Packets that have
+    reached a terminal state (DELIVERED or DROPPED) - see wifi.WiFi/
+    nru.Gnb's packet_log, populated by sent_completed()/sent_failed().
+    A Packet still PENDING at the moment its owning node's log is read
+    (e.g. mid-retry when the simulation ends) is deliberately excluded -
+    it never reached a terminal state, so it has no delivered_at and no
+    resolved fate to count as a loss or a success either way.
+
+    Returns a plain dict (not a dataclass - this is a report snapshot,
+    not a live object anything mutates) with:
+      total            - len(delivered) + len(dropped) (PENDING excluded)
+      delivered        - count of status == "DELIVERED"
+      dropped          - count of status == "DROPPED"
+      loss_rate         - dropped / total, or 0.0 if total == 0
+      avg_latency_us   - mean(delivered_at - created_at) over DELIVERED
+                          packets only, or None if there are none
+      min_latency_us   - min of the same set, or None if empty
+      max_latency_us   - max of the same set, or None if empty
+    """
+    delivered = [p for p in packets if p.status == "DELIVERED"]
+    dropped = [p for p in packets if p.status == "DROPPED"]
+    total = len(delivered) + len(dropped)
+
+    latencies = [p.delivered_at - p.created_at for p in delivered if p.delivered_at is not None]
+
+    return {
+        "total": total,
+        "delivered": len(delivered),
+        "dropped": len(dropped),
+        "loss_rate": (len(dropped) / total) if total > 0 else 0.0,
+        "avg_latency_us": (sum(latencies) / len(latencies)) if latencies else None,
+        "min_latency_us": min(latencies) if latencies else None,
+        "max_latency_us": max(latencies) if latencies else None,
+    }
+# Rashed-Step 8.G-08-06-2026-end
