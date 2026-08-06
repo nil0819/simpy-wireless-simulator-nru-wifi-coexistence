@@ -118,9 +118,14 @@ class Transmission_NR:
     rx_ue: Optional[Any] = None
     # Rashed-Step 5.G-02-06-2026-end
 
-    
+    # Rashed-Step 8.A-08-06-2026-start
+    # Same optional Packet reference as wifi.Frame - see common/packet.py
+    # and "Project details/Step 8.txt" for the rationale. None by
+    # default; Step 8.B is what actually populates it.
+    packet: Optional[Packet] = None
+    # Rashed-Step 8.A-08-06-2026-end
 
-    
+
 
 
 

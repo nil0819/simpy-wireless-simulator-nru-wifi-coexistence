@@ -14,10 +14,14 @@ import math
 
 
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # from .Times import *
 from datetime import datetime
+
+# Rashed-Step 8.A-08-06-2026-start
+from common.packet import Packet
+# Rashed-Step 8.A-08-06-2026-end
 
 
 output_csv = "lool.csv"
@@ -106,4 +110,13 @@ class Frame:
     rx_pos: Pos = None
     distance_m: float = None
     pr_dbm: float = None
+
+    # Rashed-Step 8.A-08-06-2026-start
+    # Optional reference to the Packet this Frame is carrying - None by
+    # default so every existing caller that constructs a Frame directly
+    # (there are none outside wifi.py/attacker/*.py, but this keeps the
+    # default fully backward compatible either way) is unaffected. Step
+    # 8.B is what actually populates this field.
+    packet: Optional[Packet] = None
+    # Rashed-Step 8.A-08-06-2026-end
 # Rashed-Step 2.B_1-12-30-2025-end

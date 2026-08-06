@@ -9,6 +9,9 @@ import math
 from common.common_phy import rx_power_dbm, dbm_to_mw, mw_to_dbm, Pos, sample_shadow_db, thermal_noise_dbm, spectral_overlap_fraction
 from typing import Optional, List
 from typing import Any, List, Tuple
+# Rashed-Step 8.A-08-06-2026-start
+from common.packet import Packet
+# Rashed-Step 8.A-08-06-2026-end
 # Rashed-Step 3.B-01-12-2026-end
 
 
@@ -37,6 +40,18 @@ class ActiveTx:
     bandwidth_mhz: float = 20.0
     noise_figure_db: float = 7.0
     # Rashed-Step 5.C-02-06-2026-end
+    # Rashed-Step 8.A-08-06-2026-start
+    # Optional reference to the Packet this on-air transmission is
+    # carrying - None by default (every existing ActiveTx(...) call
+    # site, including the standalone test/*.py files that construct
+    # ActiveTx directly, is unaffected). Lets a sniffer/spectrum
+    # analyzer (generic.generic_device.GenericWirelessDevice.sniff(),
+    # Step 7.A) eventually inspect real packet identity/size instead of
+    # only PHY-level tx_id/tech - not wired up yet as of Step 8.A/8.B,
+    # sniff() still only reports what channel.active_txs already
+    # exposes today.
+    packet: Optional[Packet] = None
+    # Rashed-Step 8.A-08-06-2026-end
 # Rashed-Step 3.B-01-12-2026-end
 
 
