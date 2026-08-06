@@ -40,7 +40,7 @@ from typing import List, Optional
 from dataclasses import dataclass, field
 
 from common.common import Pos, rand_pos, dist
-from common.common_phy import WaypointMobility
+from common.common_phy import WaypointMobility, check_eirp_compliance
 from channel.channel import Channel
 from wifi.wifi import WiFi, Config as WifiConfig
 from wifi.sta import WiFiSTA
@@ -111,6 +111,23 @@ def run_simulation_spectrum(
         ue_radius: float = 15.0,
         sniffer_positions: Optional[List[Pos]] = None,
         sniff_interval_us: float = 50.0,
+        # Rashed-Step 7.C-08-05-2026-start
+        # Shadowing/mobility/EIRP knobs - deliberately left out of Step
+        # 7.B's first cut, added here to bring this scenario to parity
+        # with singleRun.py's own feature set (Rashed: "incorporate
+        # shadowing/mobility/EIRP knobs"). Same defaults as
+        # singleRun.py/simulation.py throughout, so a run with all of
+        # these left at default is byte-identical to Step 7.B's
+        # behavior - purely additive/opt-in, same guarantee every one
+        # of these features has carried since Step 5.
+        shadowing_sigma_db: float = 0.0,
+        ap_mobility_speed_mps: float = 0.0,
+        gnb_mobility_speed_mps: float = 0.0,
+        sta_mobility_speed_mps: float = 0.0,
+        ue_mobility_speed_mps: float = 0.0,
+        sniffer_mobility_speed_mps: float = 0.0,
+        mobility_pause_s: float = 0.0,
+        # Rashed-Step 7.C-08-05-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -133,18 +150,47 @@ def run_simulation_spectrum(
         {},  # airtime_control
         {},  # airtime_data_NR
         {},  # airtime_control_NR
+        # Rashed-Step 7.C-08-05-2026-start
+        shadowing_sigma_db=shadowing_sigma_db,
+        # Rashed-Step 7.C-08-05-2026-end
     )
+
+    # Rashed-Step 7.C-08-05-2026-start
+    # Informational-only EIRP compliance check (warns, doesn't clamp) -
+    # same call simulation.py makes at startup, see
+    # common_phy.check_eirp_compliance()'s docstring for the U-NII band
+    # table and caveats.
+    if number_of_stations != 0:
+        check_eirp_compliance("WiFi", wifi_config.tx_power_dbm, wifi_config.f_ghz)
+    if number_of_gnb != 0:
+        check_eirp_compliance("NR-U", configNr.tx_power_dbm, configNr.f_ghz)
+    # Rashed-Step 7.C-08-05-2026-end
 
     # --- WiFi topology (same pattern as simulation.py's AP/STA loop) ---
     wifi_aps = []
     for i in range(1, number_of_stations + 1):
         ap_name = f"AP {i}"
         ap_pos = rand_pos(area_w, area_h)
+        # Rashed-Step 7.C-08-05-2026-start
+        ap_mobility = None
+        if ap_mobility_speed_mps > 0.0:
+            ap_mobility = WaypointMobility(environment, area_w, area_h,
+                                            ap_mobility_speed_mps, mobility_pause_s, ap_pos)
+        # Rashed-Step 7.C-08-05-2026-end
         stas_for_ap = []
         for k in range(1, wifi_stas_per_ap + 1):
-            sta = WiFiSTA(name=f"STA {i}-{k}", pos=rand_pos_near(ap_pos, radius=sta_radius), ap_name=ap_name)
+            sta_pos = rand_pos_near(ap_pos, radius=sta_radius)
+            # Rashed-Step 7.C-08-05-2026-start
+            sta_mobility = None
+            if sta_mobility_speed_mps > 0.0:
+                sta_mobility = WaypointMobility(environment, area_w, area_h,
+                                                 sta_mobility_speed_mps, mobility_pause_s, sta_pos)
+            sta = WiFiSTA(name=f"STA {i}-{k}", pos=sta_pos, ap_name=ap_name, mobility=sta_mobility)
+            # Rashed-Step 7.C-08-05-2026-end
             stas_for_ap.append(sta)
-        ap = WiFi(environment, ap_name, channel, ap_pos, stas_for_ap, wifi_config)
+        # Rashed-Step 7.C-08-05-2026-start
+        ap = WiFi(environment, ap_name, channel, ap_pos, stas_for_ap, wifi_config, mobility=ap_mobility)
+        # Rashed-Step 7.C-08-05-2026-end
         wifi_aps.append(ap)
 
     # --- NR-U topology (same pattern as simulation.py's gNB/UE loop) ---
@@ -152,11 +198,26 @@ def run_simulation_spectrum(
     for i in range(1, number_of_gnb + 1):
         gnb_name = f"Gnb {i}"
         gnb_pos = rand_pos(area_w, area_h)
+        # Rashed-Step 7.C-08-05-2026-start
+        gnb_mobility = None
+        if gnb_mobility_speed_mps > 0.0:
+            gnb_mobility = WaypointMobility(environment, area_w, area_h,
+                                             gnb_mobility_speed_mps, mobility_pause_s, gnb_pos)
+        # Rashed-Step 7.C-08-05-2026-end
         ues_for_gnb = []
         for k in range(1, nr_ues_per_gnb + 1):
-            ue = NrUE(name=f"UE {i}-{k}", pos=rand_pos_near(gnb_pos, radius=ue_radius), gnb_name=gnb_name)
+            ue_pos = rand_pos_near(gnb_pos, radius=ue_radius)
+            # Rashed-Step 7.C-08-05-2026-start
+            ue_mobility = None
+            if ue_mobility_speed_mps > 0.0:
+                ue_mobility = WaypointMobility(environment, area_w, area_h,
+                                                ue_mobility_speed_mps, mobility_pause_s, ue_pos)
+            ue = NrUE(name=f"UE {i}-{k}", pos=ue_pos, gnb_name=gnb_name, mobility=ue_mobility)
+            # Rashed-Step 7.C-08-05-2026-end
             ues_for_gnb.append(ue)
-        g = Gnb(environment, gnb_name, channel, gnb_pos, ues_for_gnb, configNr)
+        # Rashed-Step 7.C-08-05-2026-start
+        g = Gnb(environment, gnb_name, channel, gnb_pos, ues_for_gnb, configNr, mobility=gnb_mobility)
+        # Rashed-Step 7.C-08-05-2026-end
         gnbs.append(g)
 
     # --- Spectrum-analyzer sniffers (Step 7.A's GenericWirelessDevice) ---
@@ -169,7 +230,17 @@ def run_simulation_spectrum(
             pos = sniffer_positions[i - 1]
         else:
             pos = rand_pos(area_w, area_h)
-        dev = GenericWirelessDevice(environment, name, channel, sniffer_config, pos)
+        # Rashed-Step 7.C-08-05-2026-start
+        # Unlike AP/STA/gNB/UE above, GenericWirelessDevice builds its
+        # own WaypointMobility internally (Step 7.A) - just pass the
+        # speed/area/pause straight through, no need to construct one
+        # here ourselves.
+        dev = GenericWirelessDevice(
+            environment, name, channel, sniffer_config, pos,
+            mobility_speed_mps=sniffer_mobility_speed_mps,
+            area_w=area_w, area_h=area_h, mobility_pause_s=mobility_pause_s,
+        )
+        # Rashed-Step 7.C-08-05-2026-end
         sniffers.append(dev)
         report = SnifferReport(name=name, pos=pos)
         reports.append(report)

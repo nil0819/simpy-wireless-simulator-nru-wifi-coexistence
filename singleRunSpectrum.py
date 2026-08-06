@@ -36,19 +36,38 @@ from simulation_nr import parse_pos_list_nr as parse_pos_list  # reused verbatim
 @click.option("--nru_cw_max", "nru_cw_max", default=63, help="Size of NR-U cw max")
 @click.option("--mcot", "mcot", default=6, help="Max channel occupancy time for NR-U (ms)")
 @click.option("-syn_slot", "--synchronization_slot_duration", "synchronization_slot_duration", default=1000, help="Synchronization slot length in microseconds")
+# Rashed-Step 7.C-08-05-2026-start
+# Shadowing/mobility/EIRP knobs, brought over from singleRun.py for
+# parity - same flag names/defaults/help text where directly
+# applicable, so anyone already familiar with singleRun.py's CLI
+# doesn't have to relearn anything here.
+@click.option("--shadowing-sigma-db", "shadowing_sigma_db", type=float, default=0.0, help="Log-normal shadow fading std dev in dB, applied on top of the deterministic path loss (0 = disabled/deterministic; typical indoor value ~4-8)")
+@click.option("--wifi-tx-power-dbm", "wifi_tx_power_dbm", type=float, default=20.0, help="Wi-Fi tx power (dBm), treated as EIRP directly. Checked at startup against the FCC U-NII EIRP cap (warning only, not clamped/enforced).")
+@click.option("--nru-tx-power-dbm", "nru_tx_power_dbm", type=float, default=23.0, help="NR-U tx power (dBm). See --wifi-tx-power-dbm.")
+@click.option("--ap-mobility-speed-mps", "ap_mobility_speed_mps", type=float, default=0.0, help="AP walking/roaming speed (m/s). 0.0 (default) = static. >0 enables random-waypoint mobility within the [0,area-w]x[0,area-h] box.")
+@click.option("--gnb-mobility-speed-mps", "gnb_mobility_speed_mps", type=float, default=0.0, help="gNB roaming speed (m/s). See --ap-mobility-speed-mps.")
+@click.option("--sta-mobility-speed-mps", "sta_mobility_speed_mps", type=float, default=0.0, help="Wi-Fi STA walking speed (m/s), e.g. ~1.4 for a typical walking pace. See --ap-mobility-speed-mps.")
+@click.option("--ue-mobility-speed-mps", "ue_mobility_speed_mps", type=float, default=0.0, help="NR-U UE walking speed (m/s). See --ap-mobility-speed-mps.")
+@click.option("--sniffer-mobility-speed-mps", "sniffer_mobility_speed_mps", type=float, default=0.0, help="Sniffer roaming speed (m/s) - e.g. a vehicle- or drone-mounted spectrum scanner doing a moving sweep instead of sitting at a fixed point. See --ap-mobility-speed-mps.")
+@click.option("--mobility-pause-s", "mobility_pause_s", type=float, default=0.0, help="Dwell time (s) at each waypoint before picking the next one, for any node type with mobility enabled.")
+# Rashed-Step 7.C-08-05-2026-end
 def single_run_spectrum(
         runs, seed, ap_number, gnb_number, sniffer_number, simulation_time,
         area_w, area_h, sta_radius, ue_radius,
         sniffer_pos, sniff_interval_us, sniffer_ed_threshold_dbm,
         sniffer_bandwidth_mhz, sniffer_freq_ghz,
         wifi_cw_min, wifi_cw_max, nru_cw_min, nru_cw_max, mcot, synchronization_slot_duration,
+        shadowing_sigma_db, wifi_tx_power_dbm, nru_tx_power_dbm,
+        ap_mobility_speed_mps, gnb_mobility_speed_mps, sta_mobility_speed_mps,
+        ue_mobility_speed_mps, sniffer_mobility_speed_mps, mobility_pause_s,
 ):
     sniffer_positions = parse_pos_list(sniffer_pos, "--sniffer-pos") if sniffer_pos else None
 
-    wifi_config = WifiConfig(cw_min=wifi_cw_min, cw_max=wifi_cw_max)
+    wifi_config = WifiConfig(cw_min=wifi_cw_min, cw_max=wifi_cw_max, tx_power_dbm=wifi_tx_power_dbm)
     configNr = Config_NR(
         cw_min=nru_cw_min, cw_max=nru_cw_max, mcot=mcot,
         synchronization_slot_duration=synchronization_slot_duration,
+        tx_power_dbm=nru_tx_power_dbm,
     )
     sniffer_config = Config_Generic(
         f_hz=sniffer_freq_ghz * 1e9,
@@ -66,6 +85,13 @@ def single_run_spectrum(
             sta_radius=sta_radius, ue_radius=ue_radius,
             sniffer_positions=sniffer_positions,
             sniff_interval_us=sniff_interval_us,
+            shadowing_sigma_db=shadowing_sigma_db,
+            ap_mobility_speed_mps=ap_mobility_speed_mps,
+            gnb_mobility_speed_mps=gnb_mobility_speed_mps,
+            sta_mobility_speed_mps=sta_mobility_speed_mps,
+            ue_mobility_speed_mps=ue_mobility_speed_mps,
+            sniffer_mobility_speed_mps=sniffer_mobility_speed_mps,
+            mobility_pause_s=mobility_pause_s,
         )
 
 
