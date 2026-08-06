@@ -119,4 +119,16 @@ class Frame:
     # 8.B is what actually populates this field.
     packet: Optional[Packet] = None
     # Rashed-Step 8.A-08-06-2026-end
+
+    # Rashed-Step 8.F-08-06-2026-start
+    # Optional reference to the ACK Packet (packet_type="ACK") sent back
+    # in response to `packet` above, once/if it's successfully
+    # delivered. None by default (no ACK exists for a frame that never
+    # succeeded, or before wifi.WiFi.sent_completed() constructs one) -
+    # see that method and send_frame() for where this is populated.
+    # NR-U has no equivalent field: it has no ACK-frame concept at all
+    # (success/failure is decided purely by end-of-transmission SINR,
+    # no separate ACK phase in this simulator - see Step 8.txt).
+    ack_packet: Optional[Packet] = None
+    # Rashed-Step 8.F-08-06-2026-end
 # Rashed-Step 2.B_1-12-30-2025-end

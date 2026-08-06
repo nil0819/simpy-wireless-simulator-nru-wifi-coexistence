@@ -123,6 +123,12 @@ class WiFi:
             env.process(self._traffic_generator())
         # Rashed-Step 8.B-08-06-2026-end
 
+        # Rashed-Step 8.F-08-06-2026-start
+        # Separate counter from _packet_seq so ACK packet_ids never
+        # collide with (or get confused for) data packet_ids.
+        self._ack_seq = 0
+        # Rashed-Step 8.F-08-06-2026-end
+
         # Rashed-Step 8.E-08-06-2026-start
         # Set by sent_failed() when the retry limit is exceeded; consumed
         # by start()'s inner retry loop, which then blocks on
@@ -194,6 +200,35 @@ class WiFi:
             header_bytes=Times.mac_overhead // 8,
             created_at=self.env.now,
         )
+
+    # Rashed-Step 8.F-08-06-2026-start
+    def _make_ack_packet(self, data_packet: Optional[Packet]) -> Packet:
+        """
+        Construct the ACK Packet sent back in response to a successfully
+        delivered data_packet. Direction is reversed from the data
+        packet: source is the receiving STA, destination is this AP.
+        payload_bytes=0 (an ACK carries no payload); header_bytes uses
+        Times.ack_size (14 bytes) - the same constant
+        Times.get_ack_frame_time() already uses to compute the ACK's
+        on-air duration, so total_bytes() is consistent with the timing
+        model rather than an unrelated placeholder. Called only from
+        sent_completed() (i.e. only when the data frame actually
+        succeeded) - there is no ACK object for a failed transmission,
+        matching real 802.11 semantics (the sender just times out
+        waiting for one that was never sent).
+        """
+        self._ack_seq += 1
+        rx_name = self.sta_list[0].name if self.sta_list else self.name
+        return Packet(
+            packet_id=f"{self.name}-ACK-{self._ack_seq:06d}",
+            source=rx_name,
+            destination=self.name,
+            payload_bytes=0,
+            header_bytes=Times.ack_size // 8,
+            packet_type="ACK",
+            created_at=self.env.now,
+        )
+    # Rashed-Step 8.F-08-06-2026-end
 
     def _next_packet(self):
         """
@@ -585,6 +620,15 @@ class WiFi:
         if was_sent:
             self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
             yield self.env.timeout(self.times.get_ack_frame_time())
+            # Rashed-Step 8.F-08-06-2026-start
+            # The ACK's own "airtime" has now genuinely elapsed (the
+            # yield above) - mark it DELIVERED here, not when it was
+            # constructed in sent_completed() (that was still mid-flight
+            # at env.now - get_ack_frame_time()).
+            if self.frame_to_send.ack_packet is not None:
+                self.frame_to_send.ack_packet.status = "DELIVERED"
+                self.frame_to_send.ack_packet.delivered_at = self.env.now
+            # Rashed-Step 8.F-08-06-2026-end
             return True
         else:
             yield self.env.timeout(self.times.ack_timeout)
@@ -795,6 +839,17 @@ class WiFi:
             self.frame_to_send.packet.status = "DELIVERED"
             self.frame_to_send.packet.delivered_at = self.env.now
         # Rashed-Step 8.B-08-06-2026-end
+        # Rashed-Step 8.F-08-06-2026-start
+        # Construct the ACK packet now (data delivery just confirmed) -
+        # status stays PENDING (Packet's own default) until send_frame()
+        # finishes waiting out the ACK's on-air time and marks it
+        # DELIVERED (see send_frame(), right after the
+        # get_ack_frame_time() timeout). No ack_packet is ever created
+        # on the failure path (sent_failed()) - matches real 802.11
+        # semantics: a failed frame gets no ACK at all, the sender just
+        # times out.
+        self.frame_to_send.ack_packet = self._make_ack_packet(self.frame_to_send.packet)
+        # Rashed-Step 8.F-08-06-2026-end
         # Rashed-Step 5.1-02-06-2026-start
         # BUGFIX: this used to also do
         # self.channel.airtime_data[self.name] += self.frame_to_send.frame_time
