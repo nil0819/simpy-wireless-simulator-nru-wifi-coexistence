@@ -75,8 +75,15 @@ def run_simulation(
         gnb_mobility_speed_mps: float = 0.0,
         sta_mobility_speed_mps: float = 0.0,
         ue_mobility_speed_mps: float = 0.0,
-        mobility_pause_s: float = 0.0
+        mobility_pause_s: float = 0.0,
         # Rashed-Step 5.G-02-06-2026-end
+        # Rashed-Step 8.B-08-06-2026-start
+        # None (default, for both) = TrafficConfig(mode="saturated"),
+        # byte-identical to every pre-Step-8.B run - see
+        # wifi.WiFi/nru.Gnb's own traffic_config param docs.
+        wifi_traffic_config: Optional[TrafficConfig] = None,
+        nru_traffic_config: Optional[TrafficConfig] = None,
+        # Rashed-Step 8.B-08-06-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -196,8 +203,11 @@ def run_simulation(
                 stas_for_ap,
                 wifi_config,
                 # Rashed-Step 5.G-02-06-2026-start
-                mobility=ap_mobility
+                mobility=ap_mobility,
                 # Rashed-Step 5.G-02-06-2026-end
+                # Rashed-Step 8.B-08-06-2026-start
+                traffic_config=wifi_traffic_config
+                # Rashed-Step 8.B-08-06-2026-end
             )
         # Rashed-Step pre_5.D-02-06-2026-end
         wifi_aps.append(ap)
@@ -258,8 +268,11 @@ def run_simulation(
             ues_for_gnb,
             configNr,
             # Rashed-Step 5.G-02-06-2026-start
-            mobility=gnb_mobility
+            mobility=gnb_mobility,
             # Rashed-Step 5.G-02-06-2026-end
+            # Rashed-Step 8.B-08-06-2026-start
+            traffic_config=nru_traffic_config
+            # Rashed-Step 8.B-08-06-2026-end
         )
         gnbs.append(g)
         # Rashed-Step pre_5.A-02-06-2026-end

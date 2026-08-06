@@ -16,6 +16,9 @@ from typing import Optional
 # Rashed-Step 5.G-02-06-2026-start
 from typing import Any
 # Rashed-Step 5.G-02-06-2026-end
+# Rashed-Step 8.B-08-06-2026-start
+from common.packet import Packet, TrafficConfig
+# Rashed-Step 8.B-08-06-2026-end
 
 
 # Rashed-Step 5.D-02-06-2026-start
@@ -141,8 +144,14 @@ class Gnb:
             # Rashed-Step 1.C_2-12-26-2025-end
             config_nr: Config_NR,
             # Rashed-Step 5.G-02-06-2026-start
-            mobility: Optional[Any] = None
+            mobility: Optional[Any] = None,
             # Rashed-Step 5.G-02-06-2026-end
+            # Rashed-Step 8.B-08-06-2026-start
+            # Same contract as wifi.WiFi's traffic_config - None
+            # (default) normalizes to TrafficConfig(mode="saturated"),
+            # byte-identical to every pre-Step-8.B run.
+            traffic_config: Optional[TrafficConfig] = None
+            # Rashed-Step 8.B-08-06-2026-end
     ):
         self.config_nr = config_nr
         # self.times = Times(config.data_size, config.mcs)  # using Times script to get time calculations
@@ -161,6 +170,18 @@ class Gnb:
         self.next_sync_slot_boundry = 0
         self.cw_max = config_nr.cw_max  # cw max parameter value
         self.channel = channel  # channel objfirst_transmission
+
+        # Rashed-Step 8.B-08-06-2026-start
+        # Same queue/arrival-process pattern as wifi.WiFi - see that
+        # class's __init__ comment for the full rationale. Saturated
+        # mode (default) never touches packet_queue at all.
+        self.traffic_config = traffic_config if traffic_config is not None else TrafficConfig(mode="saturated")
+        self.packet_queue = simpy.Store(env)
+        self._packet_seq = 0
+        if self.traffic_config.mode != "saturated":
+            env.process(self._traffic_generator())
+        # Rashed-Step 8.B-08-06-2026-end
+
         env.process(self.start())  # starting simulation process
         env.process(self.sync_slot_counter())
         self.process = None  # waiting back off process
@@ -192,6 +213,51 @@ class Gnb:
         return self.mobility.pos_now() if self.mobility is not None else self.pos
     # Rashed-Step 5.G-02-06-2026-end
 
+    # Rashed-Step 8.B-08-06-2026-start
+    def _make_packet(self) -> Packet:
+        """
+        Synthesize a fresh Packet - see wifi.WiFi._make_packet() for the
+        general rationale. NR-U has no existing payload-size concept at
+        all (Transmission_NR's duration is governed purely by
+        config_nr.mcot, not by any byte count - deliberately NOT
+        changed here, see "Project details/Step 8.txt"), so
+        payload_bytes/header_bytes here are standalone values with
+        nothing downstream reading them yet: payload defaults to 1500
+        (a generic MTU-sized placeholder, distinct from WiFi's 1472 to
+        avoid implying a shared/derived value) unless
+        traffic_config.packet_size_bytes overrides it; header_bytes is
+        0 (no NR-U-specific MAC/RLC/PDCP header-size model exists yet).
+        """
+        self._packet_seq += 1
+        payload = self.traffic_config.packet_size_bytes if self.traffic_config.packet_size_bytes is not None else 1500
+        destination = self.ue_list[0].name if self.ue_list else self.name
+        return Packet(
+            packet_id=f"{self.name}-{self._packet_seq:06d}",
+            source=self.name,
+            destination=destination,
+            payload_bytes=payload,
+            header_bytes=0,
+            created_at=self.env.now,
+        )
+
+    def _next_packet(self):
+        """See wifi.WiFi._next_packet() - identical contract."""
+        if self.traffic_config.mode == "saturated":
+            return self._make_packet()
+        pkt = yield self.packet_queue.get()
+        return pkt
+
+    def _traffic_generator(self):
+        """See wifi.WiFi._traffic_generator() - identical contract."""
+        while True:
+            if self.traffic_config.mode == "poisson":
+                interval_us = random.expovariate(self.traffic_config.arrival_rate_pps / 1e6)
+            else:  # "cbr"
+                interval_us = 1e6 / self.traffic_config.arrival_rate_pps
+            yield self.env.timeout(interval_us)
+            yield self.packet_queue.put(self._make_packet())
+    # Rashed-Step 8.B-08-06-2026-end
+
     def start(self):
         # Rashed-Step 3.F-12-26-2025-start
         #print(self.env.now, self.name, "START LOOP")
@@ -199,7 +265,26 @@ class Gnb:
 
         # yield self.env.timeout(self.desync)
         while True:
-            # self.transmission_to_send = self.gen_new_transmission()
+            # Rashed-Step 8.B-08-06-2026-start
+            # UPGRADE: obtain one Packet per "episode" (this outer loop
+            # pass, covering the first attempt AND every retry within
+            # it) instead of gen_new_transmission() always synthesizing
+            # an unrelated fresh one on every single attempt (including
+            # retries) as it silently did before. In saturated mode
+            # (the default) this is still a same-tick, non-blocking
+            # call - zero timing change. In poisson/cbr mode this gNB
+            # now genuinely waits here when it has nothing queued,
+            # instead of continuously contending for the channel with
+            # phantom always-ready transmissions. gen_new_transmission()
+            # itself (called fresh every attempt, from inside
+            # send_transmission() - unchanged) now takes this same
+            # packet reference each time instead of manufacturing its
+            # own, so - as a side effect - a retried transmission is now
+            # actually carrying the SAME logical packet across retries,
+            # which it never did before (a real (if incidental)
+            # improvement, not just packet bookkeeping).
+            packet = yield from self._next_packet()
+            # Rashed-Step 8.B-08-06-2026-end
             was_sent = False
             while not was_sent:
                 if gap:
@@ -208,7 +293,7 @@ class Gnb:
                     self.process = self.env.process(self.wait_back_off_gap_after())
                     # Rashed-Step 3.E_2-01-12-2026-end
                     yield self.process
-                    was_sent = yield self.env.process(self.send_transmission())
+                    was_sent = yield self.env.process(self.send_transmission(packet))
                 else:
                     self.process = self.env.process(self.wait_back_off())
                     yield self.process
@@ -432,8 +517,14 @@ class Gnb:
             #print(f"Next synch slot boundry is: ",self.next_sync_slot_boundry)
             yield self.env.timeout(self.config_nr.synchronization_slot_duration)
 
-    def send_transmission(self):
-        self.transmission_to_send = self.gen_new_transmission()
+    # Rashed-Step 8.B-08-06-2026-start
+    # packet=None default preserves every pre-Step-8.B call site/test
+    # exactly (falls through to gen_new_transmission() synthesizing its
+    # own, same as before) - start() now passes the episode's packet
+    # explicitly (see start()'s comment).
+    def send_transmission(self, packet: Optional[Packet] = None):
+        self.transmission_to_send = self.gen_new_transmission(packet)
+    # Rashed-Step 8.B-08-06-2026-end
 
         # Rashed-Step 6.A-07-31-2026-start
         # UPGRADE: this used to acquire self.channel.tx_queue_nru (one
@@ -596,9 +687,20 @@ class Gnb:
         return True
         # Rashed-Step 3.F-01-13-2026-end
 
-    def gen_new_transmission(self):
+    # Rashed-Step 8.B-08-06-2026-start
+    # packet=None default preserves standalone/test-harness behavior
+    # exactly (synthesizes its own via _make_packet(), same as an
+    # implicit saturated-mode packet always was before this field
+    # existed). start() now passes the current episode's packet
+    # explicitly through send_transmission() so every attempt (first
+    # try and every retry) within one episode stamps the SAME Packet
+    # object here, even though a brand-new Transmission_NR is still
+    # built fresh each call (unchanged - see Step 8.txt's note on why
+    # NR-U's per-attempt regeneration pattern itself was deliberately
+    # left untouched).
+    def gen_new_transmission(self, packet: Optional[Packet] = None):
         # Rashed-Step 2.D_2-01-08-2026-start
-        
+
         # transmission_time = self.config_nr.mcot * 1000  # transforming to usec
         # if gap:
         #     rs_time = 0
@@ -606,7 +708,7 @@ class Gnb:
         #     rs_time = self.next_sync_slot_boundry - self.env.now
         # airtime = transmission_time - rs_time
         # return Transmission_NR(transmission_time, self.name, self.col, self.env.now, airtime, rs_time)
-        
+
         transmission_time = self.config_nr.mcot * 1000
         rs_time = 0 if gap else (self.next_sync_slot_boundry - self.env.now)
         airtime = transmission_time - rs_time
@@ -615,6 +717,8 @@ class Gnb:
 
         tx = Transmission_NR(
             transmission_time, self.name, self.col, self.env.now, airtime, rs_time)
+        tx.packet = packet if packet is not None else self._make_packet()
+        # Rashed-Step 8.B-08-06-2026-end
 
         # Rashed-Step 5.G-02-06-2026-start
         # current_pos() instead of self.pos/rx_ue.pos for this diagnostic
@@ -695,6 +799,23 @@ class Gnb:
         self.failed_transmissions += 1
         self.failed_transmissions_in_row += 1
         log(self, self.channel.failed_transmissions_NR)
+        # Rashed-Step 8.B-08-06-2026-start
+        # Bookkeeping only - tracked on the persisted Packet (same
+        # object across every retry within this episode, see start()),
+        # independent of number_of_retransmissions above (which is
+        # PER-Transmission_NR-OBJECT and, since gen_new_transmission()
+        # still creates a fresh Transmission_NR every attempt, can never
+        # itself exceed 1 - the `> 7` check right below is a pre-
+        # existing dead branch, found during Step 8.A's design and
+        # deliberately left untouched, see "Project details/Step
+        # 8.txt"). NR-U packets can currently only reach DELIVERED
+        # (below) - there is no working retry-limit to ever mark one
+        # DROPPED, unlike WiFi's packets. Flagged as a known asymmetry,
+        # not fixed here (would mean inventing new retry-limit
+        # behavior for NR-U, out of scope for "wire in packets").
+        if self.transmission_to_send.packet is not None:
+            self.transmission_to_send.packet.retry_count += 1
+        # Rashed-Step 8.B-08-06-2026-end
         if self.transmission_to_send.number_of_retransmissions > 7:
             self.failed_transmissions_in_row = 0
 
@@ -706,6 +827,11 @@ class Gnb:
         self.channel.succeeded_transmissions_NR += 1
         self.succeeded_transmissions += 1
         self.failed_transmissions_in_row = 0
+        # Rashed-Step 8.B-08-06-2026-start
+        if self.transmission_to_send.packet is not None:
+            self.transmission_to_send.packet.status = "DELIVERED"
+            self.transmission_to_send.packet.delivered_at = self.env.now
+        # Rashed-Step 8.B-08-06-2026-end
         return True
 
     

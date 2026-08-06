@@ -20,6 +20,9 @@ from typing import Optional
 # Rashed-Step 5.G-02-06-2026-start
 from typing import Any
 # Rashed-Step 5.G-02-06-2026-end
+# Rashed-Step 8.B-08-06-2026-start
+from common.packet import Packet, TrafficConfig
+# Rashed-Step 8.B-08-06-2026-end
 
 
 
@@ -80,8 +83,16 @@ class WiFi:
             # Rashed-Step 1.C_1-01-12-2026-start
             config: Config,
             # Rashed-Step 5.G-02-06-2026-start
-            mobility: Optional[Any] = None
+            mobility: Optional[Any] = None,
             # Rashed-Step 5.G-02-06-2026-end
+            # Rashed-Step 8.B-08-06-2026-start
+            # None (default) is normalized to TrafficConfig(mode=
+            # "saturated") below - every existing caller that doesn't
+            # know about this yet (simulation.py, every standalone
+            # test/*.py file) gets exactly today's always-has-a-frame-
+            # ready behavior, unchanged.
+            traffic_config: Optional[TrafficConfig] = None
+            # Rashed-Step 8.B-08-06-2026-end
     ):
         self.config = config
         self.times = Times(config.data_size, config.mcs)  # using Times script to get time calculations
@@ -95,6 +106,23 @@ class WiFi:
         self.cw_min = config.cw_min  # cw min parameter value
         self.cw_max = config.cw_max  # cw max parameter value
         self.channel = channel  # channel obj
+
+        # Rashed-Step 8.B-08-06-2026-start
+        # Queue + arrival-process state. self.packet_queue is
+        # constructed unconditionally (cheap - an unused simpy.Store
+        # costs nothing) but is only ever actually touched when
+        # traffic_config.mode != "saturated" - see _next_packet()/
+        # _traffic_generator() below. In saturated mode (the default),
+        # packets are synthesized on demand instead, so this AP never
+        # contends for the channel any differently than it did before
+        # Step 8.B.
+        self.traffic_config = traffic_config if traffic_config is not None else TrafficConfig(mode="saturated")
+        self.packet_queue = simpy.Store(env)
+        self._packet_seq = 0
+        if self.traffic_config.mode != "saturated":
+            env.process(self._traffic_generator())
+        # Rashed-Step 8.B-08-06-2026-end
+
         env.process(self.start())  # starting simulation process
         self.process = None  # waiting back off process
         self.channel.airtime_data.update({name: 0})
@@ -131,12 +159,85 @@ class WiFi:
         return self.mobility.pos_now() if self.mobility is not None else self.pos
     # Rashed-Step 5.G-02-06-2026-end
 
+    # Rashed-Step 8.B-08-06-2026-start
+    def _make_packet(self) -> Packet:
+        """
+        Synthesize a fresh Packet - used directly in saturated mode
+        (bypasses the queue entirely, see _next_packet()) and by the
+        traffic generator (poisson/cbr) to fill the queue. Payload size
+        defaults to self.config.data_size (matching every pre-Step-8
+        run exactly) unless traffic_config.packet_size_bytes overrides
+        it. header_bytes uses Times.mac_overhead (the same 40-byte MAC
+        header size the PHY duration formula already assumes), so
+        total_bytes() is meaningful immediately rather than a
+        placeholder - real per-technology header modeling is still a
+        later sub-step, this just reuses the constant that already
+        exists.
+        """
+        self._packet_seq += 1
+        payload = self.traffic_config.packet_size_bytes if self.traffic_config.packet_size_bytes is not None else self.config.data_size
+        destination = self.sta_list[0].name if self.sta_list else self.name
+        return Packet(
+            packet_id=f"{self.name}-{self._packet_seq:06d}",
+            source=self.name,
+            destination=destination,
+            payload_bytes=payload,
+            header_bytes=Times.mac_overhead // 8,
+            created_at=self.env.now,
+        )
+
+    def _next_packet(self):
+        """
+        Generator (SimPy-safe to `yield from` even though the saturated
+        branch never actually yields - see module note in Step 8.txt).
+        Saturated mode: returns a fresh Packet immediately, no queue
+        involved - operationally identical to every pre-Step-8.B run,
+        this AP is never idle waiting for "something to send".
+        Poisson/cbr mode: blocks on self.packet_queue.get() until the
+        traffic generator has produced one - this AP genuinely does not
+        contend for the channel while its queue is empty.
+        """
+        if self.traffic_config.mode == "saturated":
+            return self._make_packet()
+        pkt = yield self.packet_queue.get()
+        return pkt
+
+    def _traffic_generator(self):
+        """
+        Only started (in __init__) when traffic_config.mode !=
+        "saturated". Produces Packets per a Poisson process
+        (exponential inter-arrival, mean = 1/arrival_rate_pps seconds)
+        or CBR (fixed inter-arrival = 1/arrival_rate_pps seconds) and
+        pushes them into self.packet_queue.
+        """
+        while True:
+            if self.traffic_config.mode == "poisson":
+                interval_us = random.expovariate(self.traffic_config.arrival_rate_pps / 1e6)
+            else:  # "cbr"
+                interval_us = 1e6 / self.traffic_config.arrival_rate_pps
+            yield self.env.timeout(interval_us)
+            yield self.packet_queue.put(self._make_packet())
+    # Rashed-Step 8.B-08-06-2026-end
+
     def start(self):
         # Rashed-Step 3.F-12-26-2025-start
         #print(self.env.now, self.name, "START LOOP")
         # Rashed-Step 3.F-12-26-2025-end
         while True:
+            # Rashed-Step 8.B-08-06-2026-start
+            # UPGRADE: used to unconditionally call generate_new_frame()
+            # here, i.e. this AP always had a frame ready the instant it
+            # got channel access ("saturated" traffic, implicit and
+            # unconditional). Now goes through _next_packet() first -
+            # in saturated mode (the default) that's still a same-tick,
+            # non-blocking call (see _next_packet()'s docstring), so
+            # this loop's timing is unchanged; in poisson/cbr mode this
+            # AP now genuinely waits here, not contending for the
+            # channel at all, until it actually has something to send.
+            packet = yield from self._next_packet()
             self.frame_to_send = self.generate_new_frame()
+            self.frame_to_send.packet = packet
+            # Rashed-Step 8.B-08-06-2026-end
             was_sent = False
             while not was_sent:
                 self.process = self.env.process(self.wait_back_off())
@@ -574,8 +675,28 @@ class WiFi:
         self.failed_transmissions += 1
         self.failed_transmissions_in_row += 1
         log(self, self.channel.failed_transmissions)
+        # Rashed-Step 8.B-08-06-2026-start
+        if self.frame_to_send.packet is not None:
+            self.frame_to_send.packet.retry_count = self.frame_to_send.number_of_retransmissions
+        # Rashed-Step 8.B-08-06-2026-end
         if self.frame_to_send.number_of_retransmissions > self.config.r_limit:
+            # Rashed-Step 8.B-08-06-2026-start
+            # UPGRADE: the old packet gave up on/exceeded its retry
+            # limit here and used to just vanish with no record beyond
+            # the aggregate failed_transmissions counter. Now marked
+            # DROPPED before being replaced. The replacement packet is
+            # synthesized immediately (self._make_packet(), NOT routed
+            # through _next_packet()/the queue) even in poisson/cbr
+            # mode - a deliberate simplification for this first cut
+            # (documented in Step 8.txt): genuinely blocking here too
+            # would require sent_failed() to become a SimPy process
+            # itself, a bigger structural change deferred to a later
+            # sub-step if this corner case turns out to matter.
+            if self.frame_to_send.packet is not None:
+                self.frame_to_send.packet.status = "DROPPED"
             self.frame_to_send = self.generate_new_frame()
+            self.frame_to_send.packet = self._make_packet()
+            # Rashed-Step 8.B-08-06-2026-end
             self.failed_transmissions_in_row = 0
 
     def sent_completed(self):
@@ -586,6 +707,11 @@ class WiFi:
         self.succeeded_transmissions += 1
         self.failed_transmissions_in_row = 0
         self.channel.bytes_sent += self.frame_to_send.data_size
+        # Rashed-Step 8.B-08-06-2026-start
+        if self.frame_to_send.packet is not None:
+            self.frame_to_send.packet.status = "DELIVERED"
+            self.frame_to_send.packet.delivered_at = self.env.now
+        # Rashed-Step 8.B-08-06-2026-end
         # Rashed-Step 5.1-02-06-2026-start
         # BUGFIX: this used to also do
         # self.channel.airtime_data[self.name] += self.frame_to_send.frame_time

@@ -103,6 +103,12 @@ def parse_pos_list(raw_values, label: str):
 @click.option("--ue-mobility-speed-mps", "ue_mobility_speed_mps", type=float, default=0.0, help="NR-U UE walking speed (m/s). See --ap-mobility-speed-mps.")
 @click.option("--mobility-pause-s", "mobility_pause_s", type=float, default=0.0, help="Dwell time (s) at each waypoint before picking the next one, for any node type with mobility enabled. 0.0 (default) = keep moving continuously between waypoints.")
 # Rashed-Step 5.G-02-06-2026-end
+# Rashed-Step 8.B-08-06-2026-start
+@click.option("--wifi-traffic-model", "wifi_traffic_model", type=click.Choice(["saturated", "poisson", "cbr"]), default="saturated", help="Wi-Fi traffic arrival model. saturated (default) = every AP always has a frame ready the instant it gets channel access, byte-identical to every pre-Step-8.B run. poisson/cbr = packets arrive per the given rate; the AP can genuinely sit idle with nothing to send.")
+@click.option("--wifi-arrival-rate-pps", "wifi_arrival_rate_pps", type=float, default=100.0, help="Wi-Fi packet arrival rate (packets/sec), used only when --wifi-traffic-model is poisson or cbr.")
+@click.option("--nru-traffic-model", "nru_traffic_model", type=click.Choice(["saturated", "poisson", "cbr"]), default="saturated", help="NR-U traffic arrival model. See --wifi-traffic-model.")
+@click.option("--nru-arrival-rate-pps", "nru_arrival_rate_pps", type=float, default=100.0, help="NR-U packet arrival rate (packets/sec), used only when --nru-traffic-model is poisson or cbr.")
+# Rashed-Step 8.B-08-06-2026-end
 
 def single_run(
         runs: int,
@@ -158,8 +164,14 @@ def single_run(
         gnb_mobility_speed_mps: float,
         sta_mobility_speed_mps: float,
         ue_mobility_speed_mps: float,
-        mobility_pause_s: float
+        mobility_pause_s: float,
         # Rashed-Step 5.G-02-06-2026-end
+        # Rashed-Step 8.B-08-06-2026-start
+        wifi_traffic_model: str,
+        wifi_arrival_rate_pps: float,
+        nru_traffic_model: str,
+        nru_arrival_rate_pps: float
+        # Rashed-Step 8.B-08-06-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -171,6 +183,11 @@ def single_run(
     ap_positions = parse_pos_list(ap_pos, "--ap-pos") if ap_pos else None
     gnb_positions = parse_pos_list(gnb_pos, "--gnb-pos") if gnb_pos else None
     # Rashed-Step 5.A-02-06-2026-end
+
+    # Rashed-Step 8.B-08-06-2026-start
+    wifi_traffic_config = TrafficConfig(mode=wifi_traffic_model, arrival_rate_pps=wifi_arrival_rate_pps)
+    nru_traffic_config = TrafficConfig(mode=nru_traffic_model, arrival_rate_pps=nru_arrival_rate_pps)
+    # Rashed-Step 8.B-08-06-2026-end
 
     for i in range(0, runs):
         curr_seed = seed + i
@@ -216,8 +233,12 @@ def single_run(
                        gnb_mobility_speed_mps=gnb_mobility_speed_mps,
                        sta_mobility_speed_mps=sta_mobility_speed_mps,
                        ue_mobility_speed_mps=ue_mobility_speed_mps,
-                       mobility_pause_s=mobility_pause_s
+                       mobility_pause_s=mobility_pause_s,
                        # Rashed-Step 5.G-02-06-2026-end
+                       # Rashed-Step 8.B-08-06-2026-start
+                       wifi_traffic_config=wifi_traffic_config,
+                       nru_traffic_config=nru_traffic_config
+                       # Rashed-Step 8.B-08-06-2026-end
                        )
 
 
