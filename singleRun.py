@@ -59,6 +59,11 @@ def parse_pos_list(raw_values, label: str):
 @click.option(
     "--wifi_r_limit", "wifi_r_limit", default=7, help="Number of failed transmissions in a row",
 )
+# Rashed-Step 8.D-08-06-2026-start
+@click.option(
+    "--nru_r_limit", "nru_r_limit", default=7, help="NR-U: number of failed transmissions in a row before the packet is dropped and replaced. Mirrors --wifi_r_limit - unlike Wi-Fi, this cap was never actually enforced before Step 8.D (see Project details/Step 8.txt).",
+)
+# Rashed-Step 8.D-08-06-2026-end
 @click.option("-m", "--mcs-value", "mcs_value", default=7, help="Value of mcs")
 @click.option("-syn_slot", "--synchronization_slot_duration", default=1000, help="Synchronization slot length in mikrosecounds")
 @click.option("-max_des", "--max_sync_slot_desync", default=1000, help="Max value of gNB desynchronization")
@@ -127,6 +132,9 @@ def single_run(
 
         nru_cw_min: int,
         nru_cw_max: int,
+        # Rashed-Step 8.D-08-06-2026-start
+        nru_r_limit: int,
+        # Rashed-Step 8.D-08-06-2026-end
         synchronization_slot_duration: int,
         max_sync_slot_desync: int,
         min_sync_slot_desync: int,
@@ -218,6 +226,9 @@ def single_run(
                               # Rashed-Step 5.F-02-06-2026-end
                               ),
                        Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync, min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot,
+                                 # Rashed-Step 8.D-08-06-2026-start
+                                 r_limit=nru_r_limit,
+                                 # Rashed-Step 8.D-08-06-2026-end
                                  bandwidth_mhz=nru_bandwidth_mhz, noise_figure_db=nru_noise_figure_db,
                                  # Rashed-Step 5.D-02-06-2026-start
                                  mcs=nru_mcs, nru_sinr_thr_db_override=nru_sinr_thr_db_override,

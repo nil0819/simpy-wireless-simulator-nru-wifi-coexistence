@@ -57,6 +57,19 @@ class Config_NR:
     cw_max: int = 63
     mcot: int = 6  # max ocupancy time
 
+    # Rashed-Step 8.D-08-06-2026-start
+    # NEW: NR-U had no working retry limit at all before this - see
+    # sent_failed()'s note and "Project details/Step 8.txt" for the full
+    # history (a dead `> 7` check compared a per-Transmission_NR counter
+    # that always reset to 0 every attempt, since gen_new_transmission()
+    # rebuilds a fresh Transmission_NR every single try). Default (7)
+    # matches wifi.Config.r_limit's default and the magic number the
+    # dead check used, so a run with no --nru_r_limit flag now actually
+    # enforces the same "give up after 7" cap that was already implied
+    # but never enforced.
+    r_limit: int = 7
+    # Rashed-Step 8.D-08-06-2026-end
+
     # Rashed-Step 2.C_2-12-26-2025-start
     tx_power_dbm: float = 23.0 
     f_ghz: float = 5.18e9
@@ -182,6 +195,18 @@ class Gnb:
             env.process(self._traffic_generator())
         # Rashed-Step 8.B-08-06-2026-end
 
+        # Rashed-Step 8.D-08-06-2026-start
+        # The packet currently "in flight" for this episode (set at the
+        # top of start()'s outer loop, re-read fresh by start()'s inner
+        # retry loop every attempt). sent_failed() mutates this IN PLACE
+        # when the retry limit is exceeded, so the next attempt picks up
+        # the replacement packet automatically - mirrors how
+        # wifi.WiFi.sent_failed() swaps self.frame_to_send in place (see
+        # that method) rather than relying on a stale local variable
+        # captured once per episode.
+        self.current_packet = None
+        # Rashed-Step 8.D-08-06-2026-end
+
         env.process(self.start())  # starting simulation process
         env.process(self.sync_slot_counter())
         self.process = None  # waiting back off process
@@ -284,6 +309,16 @@ class Gnb:
             # which it never did before (a real (if incidental)
             # improvement, not just packet bookkeeping).
             packet = yield from self._next_packet()
+            # Rashed-Step 8.D-08-06-2026-start
+            # Stashed on self (not just the local `packet` var) so
+            # sent_failed() can swap in a replacement packet in place
+            # when the retry limit is exceeded - see current_packet's
+            # __init__ comment. The inner loop below reads
+            # self.current_packet fresh every attempt instead of the
+            # stale `packet` local, so a mid-episode swap is picked up
+            # immediately on the very next retry.
+            self.current_packet = packet
+            # Rashed-Step 8.D-08-06-2026-end
             # Rashed-Step 8.B-08-06-2026-end
             was_sent = False
             while not was_sent:
@@ -293,7 +328,7 @@ class Gnb:
                     self.process = self.env.process(self.wait_back_off_gap_after())
                     # Rashed-Step 3.E_2-01-12-2026-end
                     yield self.process
-                    was_sent = yield self.env.process(self.send_transmission(packet))
+                    was_sent = yield self.env.process(self.send_transmission(self.current_packet))
                 else:
                     self.process = self.env.process(self.wait_back_off())
                     yield self.process
@@ -800,24 +835,43 @@ class Gnb:
         self.failed_transmissions_in_row += 1
         log(self, self.channel.failed_transmissions_NR)
         # Rashed-Step 8.B-08-06-2026-start
-        # Bookkeeping only - tracked on the persisted Packet (same
-        # object across every retry within this episode, see start()),
-        # independent of number_of_retransmissions above (which is
-        # PER-Transmission_NR-OBJECT and, since gen_new_transmission()
-        # still creates a fresh Transmission_NR every attempt, can never
-        # itself exceed 1 - the `> 7` check right below is a pre-
-        # existing dead branch, found during Step 8.A's design and
-        # deliberately left untouched, see "Project details/Step
-        # 8.txt"). NR-U packets can currently only reach DELIVERED
-        # (below) - there is no working retry-limit to ever mark one
-        # DROPPED, unlike WiFi's packets. Flagged as a known asymmetry,
-        # not fixed here (would mean inventing new retry-limit
-        # behavior for NR-U, out of scope for "wire in packets").
+        # number_of_retransmissions above is PER-Transmission_NR-OBJECT
+        # and, since gen_new_transmission() creates a fresh
+        # Transmission_NR every attempt, can never itself exceed 1 - the
+        # OLD `> 7` check here compared THAT counter and was dead code
+        # (found during Step 8.A's design, documented, left untouched at
+        # the time). Step 8.D (below) replaces it with a check against
+        # the persisted Packet's retry_count instead, which DOES
+        # accumulate correctly across every retry within an episode
+        # (same Packet object throughout, since Step 8.B).
         if self.transmission_to_send.packet is not None:
             self.transmission_to_send.packet.retry_count += 1
         # Rashed-Step 8.B-08-06-2026-end
-        if self.transmission_to_send.number_of_retransmissions > 7:
+        # Rashed-Step 8.D-08-06-2026-start
+        # UPGRADE: real retry-limit + DROP now enforced, mirroring
+        # wifi.WiFi.sent_failed()'s r_limit-exceeded handling. Checked
+        # against the Packet's retry_count (persists across every
+        # attempt in this episode - see above), not the old dead
+        # per-Transmission_NR counter. If packet is None (only possible
+        # via a direct/standalone call that explicitly passed packet=
+        # None, not any real code path through start()), there is no
+        # reliable persistent identity to limit on, so this falls back
+        # to the prior (always-infinite-retry) behavior for that edge
+        # case only - unchanged, not a regression.
+        if (self.transmission_to_send.packet is not None
+                and self.transmission_to_send.packet.retry_count > self.config_nr.r_limit):
+            self.transmission_to_send.packet.status = "DROPPED"
+            # Build the replacement packet and stash it where start()'s
+            # inner retry loop will pick it up on the very next attempt
+            # (self.current_packet - see its __init__ comment). This is
+            # the same "synthesize immediately via _make_packet()"
+            # simplification wifi.WiFi.sent_failed() uses (not routed
+            # through the queue even in poisson/cbr mode) - see Step
+            # 8.txt for why, and Step 8.E for the follow-up that closes
+            # this gap for both technologies.
+            self.current_packet = self._make_packet()
             self.failed_transmissions_in_row = 0
+        # Rashed-Step 8.D-08-06-2026-end
 
     def sent_completed(self):
         log(self, f"Successfully sent transmission")
