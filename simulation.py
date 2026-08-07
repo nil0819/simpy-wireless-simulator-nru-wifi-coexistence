@@ -24,6 +24,9 @@ from common.packet import compute_packet_stats
 # Rashed-Step 9.A-08-07-2026-start
 from common.packet import compute_packet_stats_by_node
 # Rashed-Step 9.A-08-07-2026-end
+# Rashed-Step 9.D-08-07-2026-start
+from common.packet import export_packets_csv
+# Rashed-Step 9.D-08-07-2026-end
 
 
 # Rashed-Step 1.D_2-12-26-2025-start
@@ -90,6 +93,14 @@ def run_simulation(
         wifi_traffic_config: Optional[TrafficConfig] = None,
         nru_traffic_config: Optional[TrafficConfig] = None,
         # Rashed-Step 8.B-08-06-2026-end
+        # Rashed-Step 9.D-08-07-2026-start
+        # None (default) = feature off, byte-identical to every pre-
+        # Step-9.D run (no file touched at all). Set to a path (via
+        # singleRun.py's --export-packets-csv) to append one CSV row
+        # per Packet (both technologies, per-node) to that file - see
+        # common/packet.py's export_packets_csv()/PACKET_CSV_HEADER.
+        export_packets_csv_path: Optional[str] = None,
+        # Rashed-Step 9.D-08-07-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -419,6 +430,21 @@ def run_simulation(
     print("packet stats WiFi by node:", compute_packet_stats_by_node(wifi_node_logs))
     print("packet stats NRU by node:", compute_packet_stats_by_node(nru_node_logs))
     # Rashed-Step 9.A-08-07-2026-end
+
+    # Rashed-Step 9.D-08-07-2026-start
+    # Opt-in packet-level CSV export - only touches the filesystem when
+    # export_packets_csv_path was actually given (default None), so a
+    # run with no new flags set is completely unaffected by this block
+    # (not even an unconditional no-op file check, unlike lool.csv's
+    # own end-of-run block below, which always writes regardless of any
+    # flag).
+    if export_packets_csv_path is not None:
+        rows_written = export_packets_csv(
+            export_packets_csv_path, seed,
+            {"WiFi": wifi_node_logs, "NRU": nru_node_logs},
+        )
+        print(f"packet-level CSV export: wrote {rows_written} row(s) to {export_packets_csv_path}")
+    # Rashed-Step 9.D-08-07-2026-end
 
     if number_of_stations != 0:
         if(channel.failed_transmissions + channel.succeeded_transmissions) != 0:

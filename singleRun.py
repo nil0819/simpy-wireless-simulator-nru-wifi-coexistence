@@ -118,6 +118,9 @@ def parse_pos_list(raw_values, label: str):
 @click.option("--wifi-packet-size-bytes", "wifi_packet_size_bytes", type=int, default=None, help="Override Wi-Fi packet payload size (bytes). Default (unset/None) = each AP's --mcs-value-controlled config.data_size (1472B), byte-identical to every pre-Step-8.C run. When set, this size now genuinely drives the PPDU on-air duration (Times.get_ppdu_frame_time()), not just a label.")
 @click.option("--nru-packet-size-bytes", "nru_packet_size_bytes", type=int, default=None, help="Override NR-U packet payload size (bytes). Default (unset/None) = 1500B placeholder. NOTE: unlike Wi-Fi, this does NOT affect NR-U's on-air duration - NR-U's Transmission_NR duration stays purely mcot-based (real 3GPP Category-4 LBT channel-occupancy semantics), so this only affects the Packet bookkeeping (payload_bytes/total_bytes()), not timing. See Project details/Step 8.txt.")
 # Rashed-Step 8.C-08-06-2026-end
+# Rashed-Step 9.D-08-07-2026-start
+@click.option("--export-packets-csv", "export_packets_csv_path", type=str, default=None, help="Append one CSV row per packet (both technologies, per-node) to this path, for offline analysis at individual-packet granularity. Default (unset/None) = feature off, no file touched - byte-identical to every pre-Step-9.D run. Same 'write header once if the file doesn't exist yet, then append' behavior as -r/--runs > 1 or repeated invocations against the same path (a 'seed' column keeps rows from different runs distinguishable). See common/packet.py's export_packets_csv()/PACKET_CSV_HEADER for the exact columns.")
+# Rashed-Step 9.D-08-07-2026-end
 
 def single_run(
         runs: int,
@@ -186,8 +189,11 @@ def single_run(
         # Rashed-Step 8.B-08-06-2026-end
         # Rashed-Step 8.C-08-06-2026-start
         wifi_packet_size_bytes: int,
-        nru_packet_size_bytes: int
+        nru_packet_size_bytes: int,
         # Rashed-Step 8.C-08-06-2026-end
+        # Rashed-Step 9.D-08-07-2026-start
+        export_packets_csv_path: Optional[str] = None,
+        # Rashed-Step 9.D-08-07-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -259,8 +265,11 @@ def single_run(
                        # Rashed-Step 5.G-02-06-2026-end
                        # Rashed-Step 8.B-08-06-2026-start
                        wifi_traffic_config=wifi_traffic_config,
-                       nru_traffic_config=nru_traffic_config
+                       nru_traffic_config=nru_traffic_config,
                        # Rashed-Step 8.B-08-06-2026-end
+                       # Rashed-Step 9.D-08-07-2026-start
+                       export_packets_csv_path=export_packets_csv_path,
+                       # Rashed-Step 9.D-08-07-2026-end
                        )
 
 

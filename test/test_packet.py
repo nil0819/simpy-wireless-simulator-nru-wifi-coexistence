@@ -18,7 +18,10 @@ if PROJECT_ROOT not in sys.path:
 
 import simpy
 
-from common.packet import Packet, TrafficConfig, compute_packet_stats, compute_packet_stats_by_node
+from common.packet import (
+    Packet, TrafficConfig, compute_packet_stats, compute_packet_stats_by_node,
+    packet_to_csv_row, export_packets_csv, PACKET_CSV_HEADER,
+)
 from common.common import Frame
 from channel.channel import ActiveTx, Channel
 from nru.nru import Transmission_NR
@@ -335,6 +338,79 @@ def test_compute_packet_stats_by_node():
 # Rashed-Step 9.A-08-07-2026-end
 
 
+# Rashed-Step 9.D-08-07-2026-start
+def test_packet_to_csv_row_delivered_has_numeric_latency():
+    p = _make_delivered("p1", created_at=100.0, latency=250.0)
+    row = packet_to_csv_row(p, seed=7, technology="WiFi", node="AP 1")
+    assert row == [
+        7, "WiFi", "AP 1", "p1", "a", "b",
+        100, 40, 140, "DATA",
+        100.0, 0, "DELIVERED", 350.0, 250.0,
+    ]
+
+
+def test_packet_to_csv_row_dropped_has_blank_latency_and_delivered_at():
+    p = _make_dropped("p2", created_at=50.0)
+    row = packet_to_csv_row(p, seed=1, technology="NRU", node="Gnb 1")
+    # index 13 = delivered_at_us, index 14 = latency_us
+    assert row[13] == ""
+    assert row[14] == ""
+    assert row[12] == "DROPPED"
+
+
+def test_export_packets_csv_writes_header_once_and_all_rows():
+    import csv
+    import tempfile
+    import os as _os
+
+    fd, path = tempfile.mkstemp(suffix=".csv")
+    _os.close(fd)
+    _os.remove(path)  # export_packets_csv should create it fresh
+    try:
+        wifi_logs = {"AP 1": [_make_delivered("p1", 0, 100)]}
+        nru_logs = {"Gnb 1": [_make_dropped("p2", 0)]}
+
+        n1 = export_packets_csv(path, seed=1, node_packet_logs_by_tech={"WiFi": wifi_logs, "NRU": nru_logs})
+        assert n1 == 2
+
+        # Second call (e.g. -r runs > 1 with a different seed) should
+        # APPEND, not overwrite, and must NOT write the header again.
+        n2 = export_packets_csv(path, seed=2, node_packet_logs_by_tech={"WiFi": wifi_logs, "NRU": {}})
+        assert n2 == 1
+
+        with open(path, newline="") as f:
+            rows = list(csv.reader(f))
+
+        assert rows[0] == PACKET_CSV_HEADER
+        # 1 header + 2 rows (seed=1) + 1 row (seed=2) = 4 total lines
+        assert len(rows) == 4
+        seeds_seen = [r[0] for r in rows[1:]]
+        assert seeds_seen == ["1", "1", "2"]
+    finally:
+        if _os.path.exists(path):
+            _os.remove(path)
+
+
+def test_export_packets_csv_empty_logs_writes_only_header_no_rows():
+    import csv
+    import tempfile
+    import os as _os
+
+    fd, path = tempfile.mkstemp(suffix=".csv")
+    _os.close(fd)
+    _os.remove(path)
+    try:
+        n = export_packets_csv(path, seed=1, node_packet_logs_by_tech={"WiFi": {}, "NRU": {}})
+        assert n == 0
+        with open(path, newline="") as f:
+            rows = list(csv.reader(f))
+        assert rows == [PACKET_CSV_HEADER]
+    finally:
+        if _os.path.exists(path):
+            _os.remove(path)
+# Rashed-Step 9.D-08-07-2026-end
+
+
 # Rashed-Step 8.A-08-06-2026-start
 if __name__ == "__main__":
     tests = [
@@ -357,6 +433,10 @@ if __name__ == "__main__":
         test_compute_packet_stats_empty_list,
         test_compute_packet_stats_single_delivered_packet,
         test_compute_packet_stats_by_node,
+        test_packet_to_csv_row_delivered_has_numeric_latency,
+        test_packet_to_csv_row_dropped_has_blank_latency_and_delivered_at,
+        test_export_packets_csv_writes_header_once_and_all_rows,
+        test_export_packets_csv_empty_logs_writes_only_header_no_rows,
     ]
     passed = 0
     failed = 0

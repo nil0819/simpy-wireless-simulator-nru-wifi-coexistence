@@ -234,3 +234,79 @@ def compute_packet_stats_by_node(node_packet_logs: "dict[str, list[Packet]]") ->
     """
     return {name: compute_packet_stats(log) for name, log in node_packet_logs.items()}
 # Rashed-Step 9.A-08-07-2026-end
+
+
+# Rashed-Step 9.D-08-07-2026-start
+# Packet-level CSV export - optional (opt-in via singleRun.py's
+# --export-packets-csv, unset by default), for offline analysis at
+# individual-packet granularity rather than the aggregate/per-node
+# stats compute_packet_stats()/compute_packet_stats_by_node() already
+# print. Deliberately its own proper multi-column CSV, NOT copying
+# common/common.py's existing lool.csv pattern's two known bugs (a
+# single quoted header field with embedded commas instead of separate
+# columns, and a header/data column-count mismatch) - see "Project
+# details/Step 9.txt"'s 9.D section for the lool.csv code this was
+# checked against before writing this.
+PACKET_CSV_HEADER = [
+    "seed", "technology", "node", "packet_id", "source", "destination",
+    "payload_bytes", "header_bytes", "total_bytes", "packet_type",
+    "created_at_us", "retry_count", "status", "delivered_at_us", "latency_us",
+]
+
+
+def packet_to_csv_row(packet: Packet, seed, technology: str, node: str) -> list:
+    """
+    Pure function (no I/O) - builds one CSV row (list, same column
+    order as PACKET_CSV_HEADER) for a single Packet. Split out from
+    export_packets_csv() so it's independently unit-testable without
+    touching the filesystem. latency_us is delivered_at - created_at
+    for a DELIVERED packet with a real delivered_at, "" otherwise
+    (PENDING/DROPPED packets, or the theoretical case of a DELIVERED
+    packet somehow missing delivered_at) - same "no defined latency"
+    treatment compute_packet_stats() already uses for those cases,
+    just expressed as an empty CSV cell instead of a Python None.
+    """
+    if packet.status == "DELIVERED" and packet.delivered_at is not None:
+        latency_us = packet.delivered_at - packet.created_at
+    else:
+        latency_us = ""
+    return [
+        seed, technology, node, packet.packet_id, packet.source, packet.destination,
+        packet.payload_bytes, packet.header_bytes, packet.total_bytes(), packet.packet_type,
+        packet.created_at, packet.retry_count, packet.status,
+        packet.delivered_at if packet.delivered_at is not None else "",
+        latency_us,
+    ]
+
+
+def export_packets_csv(path: str, seed, node_packet_logs_by_tech: "dict[str, dict[str, list[Packet]]]") -> int:
+    """
+    Append one CSV row per Packet to `path`, across every (technology,
+    node) pair in node_packet_logs_by_tech - e.g.
+    {"WiFi": {"AP 1": [...], "AP 2": [...]}, "NRU": {"Gnb 1": [...]}}.
+    Same "write header once if the file doesn't already exist, then
+    append rows" pattern as lool.csv (so running with -r N > 1, or
+    running the same --export-packets-csv path across multiple
+    separate invocations, accumulates rows rather than overwriting) -
+    the `seed` column is what keeps rows from different runs
+    distinguishable once appended to the same file.
+
+    Returns the number of rows written (packet count), mainly so a
+    caller/scenario can print a confirmation without re-counting.
+    """
+    import csv
+    import os
+
+    write_header = not os.path.isfile(path)
+    rows_written = 0
+    with open(path, mode="a", newline="") as f:
+        writer = csv.writer(f, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        if write_header:
+            writer.writerow(PACKET_CSV_HEADER)
+        for technology, node_logs in node_packet_logs_by_tech.items():
+            for node, packets in node_logs.items():
+                for p in packets:
+                    writer.writerow(packet_to_csv_row(p, seed, technology, node))
+                    rows_written += 1
+    return rows_written
+# Rashed-Step 9.D-08-07-2026-end
