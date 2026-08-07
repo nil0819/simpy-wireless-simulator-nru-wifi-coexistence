@@ -18,7 +18,7 @@ if PROJECT_ROOT not in sys.path:
 
 import simpy
 
-from common.packet import Packet, TrafficConfig
+from common.packet import Packet, TrafficConfig, compute_packet_stats, compute_packet_stats_by_node
 from common.common import Frame
 from channel.channel import ActiveTx, Channel
 from nru.nru import Transmission_NR
@@ -198,6 +198,143 @@ def test_wifi_make_ack_packet_ids_dont_collide_with_data_packet_ids():
 # Rashed-Step 8.F-08-06-2026-end
 
 
+# Rashed-Step 9.A-08-07-2026-start
+"""
+Step 9.A unit tests: compute_packet_stats()'s jitter/stddev/percentile
+math, hand-verified against a fixed synthetic dataset, plus
+compute_packet_stats_by_node().
+"""
+
+
+def _make_delivered(packet_id, created_at, latency):
+    return Packet(
+        packet_id=packet_id, source="a", destination="b",
+        payload_bytes=100, header_bytes=40,
+        created_at=created_at, status="DELIVERED",
+        delivered_at=created_at + latency,
+    )
+
+
+def _make_dropped(packet_id, created_at):
+    return Packet(
+        packet_id=packet_id, source="a", destination="b",
+        payload_bytes=100, header_bytes=40,
+        created_at=created_at, status="DROPPED",
+    )
+
+
+def test_compute_packet_stats_hand_verified_dataset():
+    # created_at = 0,100,200,300,400 ; latency = 100,200,150,300,250
+    # (delivered_at = created_at + latency, so this list is already in
+    # creation order - jitter's internal re-sort should be a no-op here)
+    packets = [
+        _make_delivered("p1", 0, 100),
+        _make_delivered("p2", 100, 200),
+        _make_delivered("p3", 200, 150),
+        _make_delivered("p4", 300, 300),
+        _make_delivered("p5", 400, 250),
+    ]
+    stats = compute_packet_stats(packets)
+
+    assert stats["total"] == 5
+    assert stats["delivered"] == 5
+    assert stats["dropped"] == 0
+    assert stats["loss_rate"] == 0.0
+    assert stats["avg_latency_us"] == 200.0  # (100+200+150+300+250)/5
+    assert stats["min_latency_us"] == 100
+    assert stats["max_latency_us"] == 300
+
+    # population stddev of [100,200,150,300,250], mean=200:
+    # variance = (10000+0+2500+10000+2500)/5 = 5000 -> stddev = sqrt(5000)
+    assert abs(stats["latency_stddev_us"] - 5000 ** 0.5) < 1e-9
+
+    # mean abs successive diff, creation order [100,200,150,300,250]:
+    # |200-100|=100, |150-200|=50, |300-150|=150, |250-300|=50
+    # mean = (100+50+150+50)/4 = 87.5
+    assert stats["jitter_us"] == 87.5
+
+    # sorted latencies [100,150,200,250,300], linear interpolation:
+    # p50: rank=(5-1)*0.5=2.0 -> index 2 -> 200
+    # p95: rank=4*0.95=3.8 -> 250 + 0.8*(300-250) = 290
+    # p99: rank=4*0.99=3.96 -> 250 + 0.96*(300-250) = 298
+    assert stats["p50_latency_us"] == 200.0
+    assert abs(stats["p95_latency_us"] - 290.0) < 1e-9
+    assert abs(stats["p99_latency_us"] - 298.0) < 1e-9
+
+
+def test_compute_packet_stats_jitter_uses_creation_order_not_list_order():
+    # Same 5 packets as above, but shuffled in the input list - jitter
+    # must still be 87.5 (it re-sorts by created_at internally), while
+    # avg/min/max/stddev/percentiles (order-independent) are unaffected.
+    packets = [
+        _make_delivered("p4", 300, 300),
+        _make_delivered("p1", 0, 100),
+        _make_delivered("p5", 400, 250),
+        _make_delivered("p2", 100, 200),
+        _make_delivered("p3", 200, 150),
+    ]
+    stats = compute_packet_stats(packets)
+    assert stats["jitter_us"] == 87.5
+    assert stats["avg_latency_us"] == 200.0
+
+
+def test_compute_packet_stats_dropped_packets_excluded_from_latency_math():
+    packets = [
+        _make_delivered("p1", 0, 100),
+        _make_delivered("p2", 100, 200),
+        _make_dropped("p3", 200),
+        _make_dropped("p4", 300),
+    ]
+    stats = compute_packet_stats(packets)
+    assert stats["total"] == 4
+    assert stats["delivered"] == 2
+    assert stats["dropped"] == 2
+    assert stats["loss_rate"] == 0.5
+    assert stats["avg_latency_us"] == 150.0  # (100+200)/2, dropped excluded
+    assert stats["jitter_us"] == 100.0  # only one successive pair: |200-100|
+
+
+def test_compute_packet_stats_empty_list():
+    stats = compute_packet_stats([])
+    assert stats["total"] == 0
+    assert stats["delivered"] == 0
+    assert stats["dropped"] == 0
+    assert stats["loss_rate"] == 0.0
+    assert stats["avg_latency_us"] is None
+    assert stats["min_latency_us"] is None
+    assert stats["max_latency_us"] is None
+    assert stats["latency_stddev_us"] is None
+    assert stats["jitter_us"] is None
+    assert stats["p50_latency_us"] is None
+    assert stats["p95_latency_us"] is None
+    assert stats["p99_latency_us"] is None
+
+
+def test_compute_packet_stats_single_delivered_packet():
+    stats = compute_packet_stats([_make_delivered("p1", 0, 500)])
+    assert stats["delivered"] == 1
+    assert stats["avg_latency_us"] == 500
+    assert stats["latency_stddev_us"] == 0.0  # no variation to observe, not unknown
+    assert stats["jitter_us"] is None  # no successive pair possible
+    assert stats["p50_latency_us"] == 500
+    assert stats["p95_latency_us"] == 500
+    assert stats["p99_latency_us"] == 500
+
+
+def test_compute_packet_stats_by_node():
+    node_logs = {
+        "AP 1": [_make_delivered("p1", 0, 100), _make_delivered("p2", 100, 300)],
+        "AP 2": [_make_dropped("p3", 0)],
+    }
+    by_node = compute_packet_stats_by_node(node_logs)
+    assert set(by_node.keys()) == {"AP 1", "AP 2"}
+    assert by_node["AP 1"]["delivered"] == 2
+    assert by_node["AP 1"]["avg_latency_us"] == 200.0
+    assert by_node["AP 2"]["dropped"] == 1
+    assert by_node["AP 2"]["loss_rate"] == 1.0
+# Rashed-Step 9.A-08-07-2026-end
+
+
 # Rashed-Step 8.A-08-06-2026-start
 if __name__ == "__main__":
     tests = [
@@ -214,6 +351,12 @@ if __name__ == "__main__":
         test_frame_ack_packet_field_accepts_explicit_packet,
         test_wifi_make_ack_packet_fields,
         test_wifi_make_ack_packet_ids_dont_collide_with_data_packet_ids,
+        test_compute_packet_stats_hand_verified_dataset,
+        test_compute_packet_stats_jitter_uses_creation_order_not_list_order,
+        test_compute_packet_stats_dropped_packets_excluded_from_latency_math,
+        test_compute_packet_stats_empty_list,
+        test_compute_packet_stats_single_delivered_packet,
+        test_compute_packet_stats_by_node,
     ]
     passed = 0
     failed = 0

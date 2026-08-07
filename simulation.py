@@ -21,6 +21,9 @@ from common.common_phy import WaypointMobility
 # Rashed-Step 8.G-08-06-2026-start
 from common.packet import compute_packet_stats
 # Rashed-Step 8.G-08-06-2026-end
+# Rashed-Step 9.A-08-07-2026-start
+from common.packet import compute_packet_stats_by_node
+# Rashed-Step 9.A-08-07-2026-end
 
 
 # Rashed-Step 1.D_2-12-26-2025-start
@@ -404,6 +407,18 @@ def run_simulation(
     print("packet stats WiFi:", wifi_pkt_stats)
     print("packet stats NRU:", nru_pkt_stats)
     # Rashed-Step 8.G-08-06-2026-end
+
+    # Rashed-Step 9.A-08-07-2026-start
+    # Per-node breakdown of the same stats - an aggregate-only number
+    # can hide one struggling AP/gNB (e.g. one station near the edge of
+    # range with much higher loss) behind a healthy-looking average
+    # across the rest. Same getattr(...) fallback as the aggregated
+    # version above, for the same --rogue True reason.
+    wifi_node_logs = {ap.name: getattr(ap, "packet_log", []) for ap in wifi_aps}
+    nru_node_logs = {g.name: g.packet_log for g in gnbs}
+    print("packet stats WiFi by node:", compute_packet_stats_by_node(wifi_node_logs))
+    print("packet stats NRU by node:", compute_packet_stats_by_node(nru_node_logs))
+    # Rashed-Step 9.A-08-07-2026-end
 
     if number_of_stations != 0:
         if(channel.failed_transmissions + channel.succeeded_transmissions) != 0:
