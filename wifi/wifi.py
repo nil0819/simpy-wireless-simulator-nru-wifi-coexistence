@@ -22,6 +22,9 @@ from typing import Any
 # Rashed-Step 5.G-02-06-2026-end
 # Rashed-Step 8.B-08-06-2026-start
 from common.packet import Packet, TrafficConfig
+# Rashed-Step 10.A-08-07-2026-start
+from common.packet import pick_traffic_class
+# Rashed-Step 10.A-08-07-2026-end
 # Rashed-Step 8.B-08-06-2026-end
 
 
@@ -205,6 +208,15 @@ class WiFi:
         self._packet_seq += 1
         payload = self.traffic_config.packet_size_bytes if self.traffic_config.packet_size_bytes is not None else self.config.data_size
         destination = self.sta_list[0].name if self.sta_list else self.name
+        # Rashed-Step 10.A-08-07-2026-start
+        # None (default) = no random draw at all, plain "best_effort" -
+        # see TrafficConfig.traffic_class_mix's docstring for why this
+        # matters for RNG-footprint regression safety.
+        if self.traffic_config.traffic_class_mix is not None:
+            traffic_class = pick_traffic_class(self.traffic_config.traffic_class_mix)
+        else:
+            traffic_class = "best_effort"
+        # Rashed-Step 10.A-08-07-2026-end
         return Packet(
             packet_id=f"{self.name}-{self._packet_seq:06d}",
             source=self.name,
@@ -212,6 +224,9 @@ class WiFi:
             payload_bytes=payload,
             header_bytes=Times.mac_overhead // 8,
             created_at=self.env.now,
+            # Rashed-Step 10.A-08-07-2026-start
+            traffic_class=traffic_class,
+            # Rashed-Step 10.A-08-07-2026-end
         )
 
     # Rashed-Step 8.F-08-06-2026-start
@@ -240,6 +255,14 @@ class WiFi:
             header_bytes=Times.ack_size // 8,
             packet_type="ACK",
             created_at=self.env.now,
+            # Rashed-Step 10.A-08-07-2026-start
+            # Inherits the data packet's traffic_class - an ACK is part
+            # of the same flow's QoS handling, not its own independent
+            # class. Falls back to "best_effort" only in the
+            # (non-real-world) case data_packet is None, matching
+            # Packet.traffic_class's own default.
+            traffic_class=data_packet.traffic_class if data_packet is not None else "best_effort",
+            # Rashed-Step 10.A-08-07-2026-end
         )
     # Rashed-Step 8.F-08-06-2026-end
 

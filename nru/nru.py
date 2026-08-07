@@ -18,6 +18,9 @@ from typing import Any
 # Rashed-Step 5.G-02-06-2026-end
 # Rashed-Step 8.B-08-06-2026-start
 from common.packet import Packet, TrafficConfig
+# Rashed-Step 10.A-08-07-2026-start
+from common.packet import pick_traffic_class
+# Rashed-Step 10.A-08-07-2026-end
 # Rashed-Step 8.B-08-06-2026-end
 
 
@@ -269,6 +272,14 @@ class Gnb:
         self._packet_seq += 1
         payload = self.traffic_config.packet_size_bytes if self.traffic_config.packet_size_bytes is not None else 1500
         destination = self.ue_list[0].name if self.ue_list else self.name
+        # Rashed-Step 10.A-08-07-2026-start
+        # See wifi.WiFi._make_packet()'s identical comment - None
+        # (default) means no random draw at all, plain "best_effort".
+        if self.traffic_config.traffic_class_mix is not None:
+            traffic_class = pick_traffic_class(self.traffic_config.traffic_class_mix)
+        else:
+            traffic_class = "best_effort"
+        # Rashed-Step 10.A-08-07-2026-end
         return Packet(
             packet_id=f"{self.name}-{self._packet_seq:06d}",
             source=self.name,
@@ -276,6 +287,9 @@ class Gnb:
             payload_bytes=payload,
             header_bytes=0,
             created_at=self.env.now,
+            # Rashed-Step 10.A-08-07-2026-start
+            traffic_class=traffic_class,
+            # Rashed-Step 10.A-08-07-2026-end
         )
 
     def _next_packet(self):

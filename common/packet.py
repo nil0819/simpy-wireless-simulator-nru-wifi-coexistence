@@ -36,7 +36,65 @@ WHAT THIS FILE DELIBERATELY DOES NOT DO YET
 
 from dataclasses import dataclass
 from typing import Optional
+import random
 import statistics
+
+
+# Rashed-Step 10.A-08-07-2026-start
+# Canonical traffic-class labels this simulator recognizes, in PRIORITY
+# ORDER (index 0 = highest priority) - deliberately named after Wi-Fi
+# WMM's real Access Categories (AC_VO/AC_VI/AC_BE/AC_BK, 802.11e) rather
+# than something simulator-specific, since that's the real standard
+# Step 10.B (differentiated EDCA-style channel access, not built yet)
+# will map these onto. "best_effort" is the class every Packet has
+# always implicitly been before this step - see Packet.traffic_class's
+# own default and TrafficConfig.traffic_class_mix's docstring for why
+# that keeps every pre-Step-10.A run byte-identical.
+QOS_TRAFFIC_CLASSES = ("voice", "video", "best_effort", "background")
+
+
+def traffic_class_priority_rank(traffic_class: str) -> int:
+    """
+    Lower return value = higher priority (0 = "voice", the highest).
+    An unrecognized label (any string not in QOS_TRAFFIC_CLASSES) ranks
+    LOWEST rather than raising - deliberately lenient, matching this
+    project's existing "don't validate caller-supplied labels" policy
+    (e.g. attacker.packet_attacker.spoof()'s forged_source isn't
+    checked against the real topology either). Not used by anything
+    yet in Step 10.A itself - defined here as the shared ordering a
+    later differentiated-channel-access phase (Step 10.B) will consume,
+    so that phase doesn't need to invent its own ranking scheme.
+    """
+    try:
+        return QOS_TRAFFIC_CLASSES.index(traffic_class)
+    except ValueError:
+        return len(QOS_TRAFFIC_CLASSES)
+
+
+def pick_traffic_class(traffic_class_mix: "dict[str, float]") -> str:
+    """
+    Weighted random draw of one traffic-class label from
+    traffic_class_mix (e.g. {"voice": 0.1, "video": 0.2,
+    "best_effort": 0.5, "background": 0.2} - weights don't need to sum
+    to 1, random.choices() normalizes them itself). Split out as its
+    own function (rather than inlined in wifi.py/nru.py) so the actual
+    draw logic has one implementation both technologies share and so
+    it's independently unit-testable without constructing a full WiFi/
+    Gnb object. Uses the global `random` module directly (not a
+    per-object Random instance) - matches every other random draw in
+    this simulator (wifi.py/nru.py's own traffic generators, backoff
+    slot selection, etc.), all of which go through the single
+    `random.seed(seed)` call at the top of run_simulation() for
+    reproducibility. Callers are responsible for only calling this when
+    traffic_class_mix is not None (see TrafficConfig.traffic_class_mix's
+    docstring on why the None case must skip this entirely, not just
+    skip via a trivial single-key dict) - keeps this function simple
+    and its one random.choices() call an honest, minimal footprint.
+    """
+    classes = list(traffic_class_mix.keys())
+    weights = list(traffic_class_mix.values())
+    return random.choices(classes, weights=weights)[0]
+# Rashed-Step 10.A-08-07-2026-end
 
 
 @dataclass
@@ -57,6 +115,21 @@ class Packet:
     # exceeding the technology's retry limit).
     status: str = "PENDING"
     delivered_at: Optional[float] = None
+    # Rashed-Step 10.A-08-07-2026-start
+    # QoS traffic class - see QOS_TRAFFIC_CLASSES for the recognized
+    # labels (not enforced/validated here, same leniency policy as
+    # traffic_class_priority_rank()). Default "best_effort" matches
+    # every Packet's implicit class before this field existed, so any
+    # code that doesn't know about traffic classes yet (every call site
+    # before Step 10.A, and every technology/scenario that never opts
+    # into TrafficConfig.traffic_class_mix) is completely unaffected -
+    # this field is added at the END of the dataclass specifically so
+    # it cannot shift any existing POSITIONAL Packet(...) construction
+    # call's argument indices (every real call site in this codebase
+    # already uses keyword arguments, but appending at the end is the
+    # zero-risk choice regardless).
+    traffic_class: str = "best_effort"
+    # Rashed-Step 10.A-08-07-2026-end
 
     def total_bytes(self) -> int:
         return self.payload_bytes + self.header_bytes
@@ -92,6 +165,24 @@ class TrafficConfig:
     # override with a different fixed size without touching the
     # node's main Config/Config_NR object.
     packet_size_bytes: Optional[int] = None
+    # Rashed-Step 10.A-08-07-2026-start
+    # None (default) = every packet this node creates gets
+    # traffic_class="best_effort" (Packet's own default) via a plain
+    # hardcoded assignment - NO random draw happens at all, so a run
+    # with this unset is not just behaviorally but RNG-footprint
+    # identical to every pre-Step-10.A run (an important distinction in
+    # this codebase - see Step 8.E's writeup on how even an
+    # unconsumed-but-still-called random draw can shift unrelated
+    # downstream random sequences and break regression baselines).
+    # Set to a dict of {traffic_class_label: weight, ...} (labels
+    # should normally be from QOS_TRAFFIC_CLASSES, though this isn't
+    # enforced - see traffic_class_priority_rank()'s docstring) to have
+    # each new packet draw its class via pick_traffic_class() instead -
+    # e.g. {"voice": 0.1, "video": 0.2, "best_effort": 0.5,
+    # "background": 0.2} models one node generating a realistic mixed
+    # traffic load, rather than every packet being the same class.
+    traffic_class_mix: "Optional[dict[str, float]]" = None
+    # Rashed-Step 10.A-08-07-2026-end
 # Rashed-Step 8.A-08-06-2026-end
 
 

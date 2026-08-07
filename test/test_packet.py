@@ -11,6 +11,7 @@ test_generic_device.py: plain assert-based, no pytest dependency.
 
 import sys
 import os
+import random
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
@@ -21,10 +22,11 @@ import simpy
 from common.packet import (
     Packet, TrafficConfig, compute_packet_stats, compute_packet_stats_by_node,
     packet_to_csv_row, export_packets_csv, PACKET_CSV_HEADER,
+    QOS_TRAFFIC_CLASSES, traffic_class_priority_rank, pick_traffic_class,
 )
 from common.common import Frame
 from channel.channel import ActiveTx, Channel
-from nru.nru import Transmission_NR
+from nru.nru import Transmission_NR, Gnb, Config_NR
 from wifi.wifi import WiFi, Config
 
 
@@ -199,6 +201,151 @@ def test_wifi_make_ack_packet_ids_dont_collide_with_data_packet_ids():
     assert ack_pkt.packet_id != data_pkt.packet_id
     assert "ACK" in ack_pkt.packet_id
 # Rashed-Step 8.F-08-06-2026-end
+
+
+# Rashed-Step 10.A-08-07-2026-start
+"""
+Step 10.A unit tests: Packet.traffic_class / TrafficConfig.
+traffic_class_mix defaults, QOS_TRAFFIC_CLASSES/traffic_class_priority_
+rank()/pick_traffic_class() pure functions, and wifi.WiFi/nru.Gnb
+_make_packet() wiring (including the zero-RNG-footprint guarantee when
+traffic_class_mix is left at its None default).
+"""
+
+
+def test_packet_traffic_class_defaults_to_best_effort():
+    p = Packet(packet_id="x", source="a", destination="b", payload_bytes=100, header_bytes=40)
+    assert p.traffic_class == "best_effort"
+
+
+def test_traffic_config_traffic_class_mix_defaults_to_none():
+    tc = TrafficConfig()
+    assert tc.traffic_class_mix is None
+
+
+def test_qos_traffic_classes_order_and_membership():
+    assert QOS_TRAFFIC_CLASSES == ("voice", "video", "best_effort", "background")
+    assert "best_effort" in QOS_TRAFFIC_CLASSES
+
+
+def test_traffic_class_priority_rank_known_labels_in_order():
+    assert traffic_class_priority_rank("voice") == 0
+    assert traffic_class_priority_rank("video") == 1
+    assert traffic_class_priority_rank("best_effort") == 2
+    assert traffic_class_priority_rank("background") == 3
+    assert traffic_class_priority_rank("voice") < traffic_class_priority_rank("video") < traffic_class_priority_rank("background")
+
+
+def test_traffic_class_priority_rank_unknown_label_ranks_lowest():
+    rank = traffic_class_priority_rank("totally_made_up_label")
+    assert rank == len(QOS_TRAFFIC_CLASSES)
+    assert rank > traffic_class_priority_rank("background"), "an unrecognized label must rank BELOW every recognized one"
+
+
+def test_pick_traffic_class_only_returns_given_keys():
+    mix = {"voice": 0.1, "video": 0.2, "best_effort": 0.5, "background": 0.2}
+    random.seed(42)
+    seen = {pick_traffic_class(mix) for _ in range(200)}
+    assert seen <= set(mix.keys())
+    # With 200 draws across 4 non-negligible weights, every class should
+    # have come up at least once - catches a broken weights= wiring
+    # (e.g. always returning the first key) that a single-draw test
+    # wouldn't reliably catch.
+    assert seen == set(mix.keys())
+
+
+def test_pick_traffic_class_respects_weights_statistically():
+    # A very lopsided mix - "voice" should dominate the draws.
+    mix = {"voice": 0.97, "background": 0.03}
+    random.seed(1)
+    counts = {"voice": 0, "background": 0}
+    for _ in range(500):
+        counts[pick_traffic_class(mix)] += 1
+    assert counts["voice"] > counts["background"] * 5, f"expected voice to dominate a 97/3 mix, got {counts}"
+
+
+def test_wifi_make_packet_defaults_to_best_effort_with_zero_rng_footprint():
+    ap = _make_test_wifi()
+    assert ap.traffic_config.traffic_class_mix is None  # default TrafficConfig(mode="saturated")
+    state_before = random.getstate()
+    p = ap._make_packet()
+    state_after = random.getstate()
+    assert p.traffic_class == "best_effort"
+    assert state_before == state_after, (
+        "traffic_class_mix=None must not consume any random draw at all - "
+        "see TrafficConfig.traffic_class_mix's docstring on why an unconsumed-"
+        "but-still-called random draw would be a regression risk in this codebase"
+    )
+
+
+def test_wifi_make_packet_draws_from_configured_mix():
+    ap = _make_test_wifi()
+    ap.traffic_config = TrafficConfig(mode="saturated", traffic_class_mix={"voice": 0.5, "video": 0.5})
+    random.seed(7)
+    classes_seen = {ap._make_packet().traffic_class for _ in range(100)}
+    assert classes_seen <= {"voice", "video"}
+    assert classes_seen == {"voice", "video"}, "expected both configured classes to appear across 100 draws"
+
+
+def test_wifi_make_ack_packet_inherits_data_packet_traffic_class():
+    ap = _make_test_wifi()
+    ap.traffic_config = TrafficConfig(mode="saturated", traffic_class_mix={"voice": 1.0})
+    data_pkt = ap._make_packet()
+    assert data_pkt.traffic_class == "voice"
+    ack = ap._make_ack_packet(data_pkt)
+    assert ack.traffic_class == "voice"
+
+
+def test_wifi_make_ack_packet_falls_back_to_best_effort_when_data_packet_none():
+    ap = _make_test_wifi()
+    ack = ap._make_ack_packet(None)
+    assert ack.traffic_class == "best_effort"
+
+
+def _make_test_gnb():
+    """Minimal Gnb construction, same pattern as _make_test_wifi()."""
+    env = simpy.Environment()
+    channel = Channel(
+        tx_queue=simpy.PriorityResource(env, capacity=1),
+        tx_lock=simpy.Resource(env, capacity=1),
+        n_of_stations=0,
+        n_of_gNB=1,
+        backoffs={},
+        airtime_data={},
+        airtime_control={},
+        airtime_data_NR={},
+        airtime_control_NR={},
+    )
+    channel.airtime_data_NR["Gnb 1"] = 0
+    channel.airtime_control_NR["Gnb 1"] = 0
+
+    class _FakeUe:
+        name = "UE 1-1"
+        def current_pos(self):
+            return (1.0, 0.0)
+
+    g = Gnb(env, "Gnb 1", channel, (0.0, 0.0), [_FakeUe()], Config_NR())
+    return g
+
+
+def test_nru_make_packet_defaults_to_best_effort_with_zero_rng_footprint():
+    g = _make_test_gnb()
+    assert g.traffic_config.traffic_class_mix is None
+    state_before = random.getstate()
+    p = g._make_packet()
+    state_after = random.getstate()
+    assert p.traffic_class == "best_effort"
+    assert state_before == state_after
+
+
+def test_nru_make_packet_draws_from_configured_mix():
+    g = _make_test_gnb()
+    g.traffic_config = TrafficConfig(mode="saturated", traffic_class_mix={"video": 0.5, "background": 0.5})
+    random.seed(3)
+    classes_seen = {g._make_packet().traffic_class for _ in range(100)}
+    assert classes_seen <= {"video", "background"}
+    assert classes_seen == {"video", "background"}
+# Rashed-Step 10.A-08-07-2026-end
 
 
 # Rashed-Step 9.A-08-07-2026-start
@@ -437,6 +584,19 @@ if __name__ == "__main__":
         test_packet_to_csv_row_dropped_has_blank_latency_and_delivered_at,
         test_export_packets_csv_writes_header_once_and_all_rows,
         test_export_packets_csv_empty_logs_writes_only_header_no_rows,
+        test_packet_traffic_class_defaults_to_best_effort,
+        test_traffic_config_traffic_class_mix_defaults_to_none,
+        test_qos_traffic_classes_order_and_membership,
+        test_traffic_class_priority_rank_known_labels_in_order,
+        test_traffic_class_priority_rank_unknown_label_ranks_lowest,
+        test_pick_traffic_class_only_returns_given_keys,
+        test_pick_traffic_class_respects_weights_statistically,
+        test_wifi_make_packet_defaults_to_best_effort_with_zero_rng_footprint,
+        test_wifi_make_packet_draws_from_configured_mix,
+        test_wifi_make_ack_packet_inherits_data_packet_traffic_class,
+        test_wifi_make_ack_packet_falls_back_to_best_effort_when_data_packet_none,
+        test_nru_make_packet_defaults_to_best_effort_with_zero_rng_footprint,
+        test_nru_make_packet_draws_from_configured_mix,
     ]
     passed = 0
     failed = 0

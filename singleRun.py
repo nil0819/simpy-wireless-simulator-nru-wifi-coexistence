@@ -28,6 +28,36 @@ def parse_pos_list(raw_values, label: str):
 # Rashed-Step 5.A-02-06-2026-end
 
 
+# Rashed-Step 10.A-08-07-2026-start
+def parse_traffic_class_mix(raw_values, label: str):
+    """Parse a tuple of 'class_label=weight' strings (from a repeatable
+    click option, e.g. --wifi-traffic-class-mix voice=0.1 --wifi-traffic-
+    class-mix video=0.2 ...) into a {label: weight} dict. Raises
+    click.BadParameter on malformed input, same fail-fast convention as
+    parse_pos_list(). Does NOT validate labels against
+    common.packet.QOS_TRAFFIC_CLASSES - matches that module's own
+    deliberate leniency (see traffic_class_priority_rank()'s docstring),
+    so a typo'd or custom label doesn't hard-error, it just ranks lowest
+    if Step 10.B's priority ordering ever reads it."""
+    mix = {}
+    for raw in raw_values:
+        parts = raw.split("=")
+        if len(parts) != 2:
+            raise click.BadParameter(
+                f"{label} must be given as 'class_label=weight' (got: {raw!r})"
+            )
+        label_name, weight_str = parts[0], parts[1]
+        try:
+            weight = float(weight_str)
+        except ValueError:
+            raise click.BadParameter(
+                f"{label} weight must be numeric (got: {raw!r})"
+            )
+        mix[label_name] = weight
+    return mix
+# Rashed-Step 10.A-08-07-2026-end
+
+
 @click.command()
 @click.option("-r", "--runs", "runs", default=10, help="Number of simulation runs")
 @click.option("--seed", "seed", default=1, help="Seed for simulation")
@@ -121,6 +151,10 @@ def parse_pos_list(raw_values, label: str):
 # Rashed-Step 9.D-08-07-2026-start
 @click.option("--export-packets-csv", "export_packets_csv_path", type=str, default=None, help="Append one CSV row per packet (both technologies, per-node) to this path, for offline analysis at individual-packet granularity. Default (unset/None) = feature off, no file touched - byte-identical to every pre-Step-9.D run. Same 'write header once if the file doesn't exist yet, then append' behavior as -r/--runs > 1 or repeated invocations against the same path (a 'seed' column keeps rows from different runs distinguishable). See common/packet.py's export_packets_csv()/PACKET_CSV_HEADER for the exact columns.")
 # Rashed-Step 9.D-08-07-2026-end
+# Rashed-Step 10.A-08-07-2026-start
+@click.option("--wifi-traffic-class-mix", "wifi_traffic_class_mix", type=str, multiple=True, help="Wi-Fi QoS traffic-class mix, repeatable 'class_label=weight' (e.g. --wifi-traffic-class-mix voice=0.1 --wifi-traffic-class-mix video=0.2 --wifi-traffic-class-mix best_effort=0.5 --wifi-traffic-class-mix background=0.2). Default (unset) = every packet stays 'best_effort' with NO random draw at all - byte-identical to every pre-Step-10.A run. When set, each new packet draws its class via a weighted random choice. Labels are conventionally from common.packet.QOS_TRAFFIC_CLASSES (voice/video/best_effort/background, WMM-AC-flavored) but not enforced. This only tags packets for now - actual differentiated channel access (EDCA-style priority) is a later step, not yet implemented.")
+@click.option("--nru-traffic-class-mix", "nru_traffic_class_mix", type=str, multiple=True, help="NR-U QoS traffic-class mix. See --wifi-traffic-class-mix.")
+# Rashed-Step 10.A-08-07-2026-end
 
 def single_run(
         runs: int,
@@ -194,6 +228,10 @@ def single_run(
         # Rashed-Step 9.D-08-07-2026-start
         export_packets_csv_path: Optional[str] = None,
         # Rashed-Step 9.D-08-07-2026-end
+        # Rashed-Step 10.A-08-07-2026-start
+        wifi_traffic_class_mix=(),
+        nru_traffic_class_mix=(),
+        # Rashed-Step 10.A-08-07-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -206,12 +244,34 @@ def single_run(
     gnb_positions = parse_pos_list(gnb_pos, "--gnb-pos") if gnb_pos else None
     # Rashed-Step 5.A-02-06-2026-end
 
+    # Rashed-Step 10.A-08-07-2026-start
+    # Empty tuple (default, no --wifi/nru-traffic-class-mix given) ->
+    # empty dict from parse_traffic_class_mix() -> falsy -> normalized
+    # to None here, NOT an empty-but-not-None dict, so
+    # TrafficConfig.traffic_class_mix stays exactly None (the "no random
+    # draw at all" case its own docstring requires) rather than a
+    # technically-truthy-check-passing empty dict that would behave
+    # differently depending on how downstream code tests it.
+    wifi_class_mix = parse_traffic_class_mix(wifi_traffic_class_mix, "--wifi-traffic-class-mix") or None
+    nru_class_mix = parse_traffic_class_mix(nru_traffic_class_mix, "--nru-traffic-class-mix") or None
+    # Rashed-Step 10.A-08-07-2026-end
+
     # Rashed-Step 8.B-08-06-2026-start
     # Rashed-Step 8.C-08-06-2026: added packet_size_bytes=... (defaults
     # to None, matching TrafficConfig's own default - unset means "use
     # the node's own built-in default size", exactly as before).
-    wifi_traffic_config = TrafficConfig(mode=wifi_traffic_model, arrival_rate_pps=wifi_arrival_rate_pps, packet_size_bytes=wifi_packet_size_bytes)
-    nru_traffic_config = TrafficConfig(mode=nru_traffic_model, arrival_rate_pps=nru_arrival_rate_pps, packet_size_bytes=nru_packet_size_bytes)
+    wifi_traffic_config = TrafficConfig(
+        mode=wifi_traffic_model, arrival_rate_pps=wifi_arrival_rate_pps, packet_size_bytes=wifi_packet_size_bytes,
+        # Rashed-Step 10.A-08-07-2026-start
+        traffic_class_mix=wifi_class_mix,
+        # Rashed-Step 10.A-08-07-2026-end
+    )
+    nru_traffic_config = TrafficConfig(
+        mode=nru_traffic_model, arrival_rate_pps=nru_arrival_rate_pps, packet_size_bytes=nru_packet_size_bytes,
+        # Rashed-Step 10.A-08-07-2026-start
+        traffic_class_mix=nru_class_mix,
+        # Rashed-Step 10.A-08-07-2026-end
+    )
     # Rashed-Step 8.B-08-06-2026-end
 
     for i in range(0, runs):
