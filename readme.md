@@ -7,6 +7,8 @@ Simulator created based on the master thesis `Jakub_Cichon_Master_s_Thesis.pdf` 
 
 This branch (`improved-simulator-2025`) extends that original process/collision-count-based simulator with a real physical layer (path loss, shadowing, SINR/capture-effect success decisions, per-technology MCS/frequency/bandwidth modeling, regulatory EIRP checks, node mobility), a shared real-packet abstraction (queueing/traffic models, retries, ACKs, latency/loss/jitter statistics), a protocol-agnostic generic wireless node usable as a spectrum analyzer or an attack base class, and packet-level attacker capabilities (spoofing, replay) - on top of the original Wi-Fi/NR-U CSMA/LBT coexistence logic, without changing that original access-protocol behavior. See "Project details/" for the full, chronological design/verification log of every change (one `Step N.txt` file per major step, each with a `DONE` section per sub-step listing exactly what changed and how it was verified).
 
+**New here?** See [`GETTING_STARTED.md`](GETTING_STARTED.md) for a short, hands-on walkthrough of all four scenarios - the sections below are the full reference.
+
 ## Installation
 
 - (Optional) Launch virtual env: `python3 -m venv env && source env/bin/activate`
