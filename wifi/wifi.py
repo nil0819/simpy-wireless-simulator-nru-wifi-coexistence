@@ -553,8 +553,24 @@ class WiFi:
             tech="WiFi",
             # Rashed-Step 5.C-02-06-2026-start
             bandwidth_mhz=self.config.bandwidth_mhz,
-            noise_figure_db=self.config.noise_figure_db
+            noise_figure_db=self.config.noise_figure_db,
             # Rashed-Step 5.C-02-06-2026-end
+            # Rashed-Step 9.B-08-07-2026-start
+            # UPGRADE/BUGFIX: ActiveTx.packet has existed since Step
+            # 8.A, but this construction never actually passed one
+            # through - the field silently stayed None for every real
+            # WiFi transmission ever registered on the channel, so
+            # nothing reading channel.active_txs (like generic.
+            # GenericWirelessDevice.sniff(), Step 7.A) could ever see a
+            # WiFi packet's identity, only its RF/timing metadata. Found
+            # while wiring GenericWirelessDevice into the packet system
+            # (Step 9.B) - fixing this is a prerequisite for that,
+            # not a side quest. Purely additive: .packet is never READ
+            # anywhere in channel.py's collision/SINR/timing logic
+            # (confirmed via grep before making this change), so this
+            # cannot affect any existing simulation outcome.
+            packet=self.frame_to_send.packet,
+            # Rashed-Step 9.B-08-07-2026-end
         )
         # Rashed-Step 4.B_4-01-20-2026-start
         #print(self.env.now, self.name, "TX->RX d=", dist(self.pos, rx_pos))

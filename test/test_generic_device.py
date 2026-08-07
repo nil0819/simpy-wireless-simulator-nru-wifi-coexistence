@@ -21,6 +21,9 @@ import simpy
 
 from channel.channel import Channel, ActiveTx
 from generic.generic_device import Config_Generic, GenericWirelessDevice
+# Rashed-Step 9.B-08-07-2026-start
+from common.packet import Packet
+# Rashed-Step 9.B-08-07-2026-end
 
 
 def make_channel(env, shadowing_sigma_db: float = 0.0):
@@ -274,6 +277,124 @@ def test_static_device_never_moves():
     env.run(until=50000)
     assert dev.current_pos() == (3.0, 4.0), "a device constructed with mobility_speed_mps=0.0 (default) must never move"
     assert dev.mobility is None
+
+
+# Rashed-Step 9.B-08-07-2026-start
+# =======================================================================
+# Packet visibility: transmit(packet=...) stamps ActiveTx.packet,
+# sniff() surfaces it via VisibleTx.packet, packet_log records it
+# =======================================================================
+
+def test_transmit_with_no_packet_behaves_exactly_as_before():
+    # Default (no packet= arg) must be indistinguishable from every
+    # pre-9.B call site - same as wifi.py/nru.py's ActiveTx.packet
+    # defaulting to None before their own 9.B fix.
+    env = simpy.Environment()
+    ch = make_channel(env)
+    cfg = Config_Generic()
+    dev = GenericWirelessDevice(env, "GEN1", ch, cfg, pos=(0.0, 0.0))
+
+    captured = []
+
+    def run():
+        proc = env.process(dev.transmit(duration_us=1000))
+        yield env.timeout(10)
+        captured.append(dev.active_tx.packet)
+        yield proc
+
+    env.process(run())
+    env.run(until=5000)
+
+    assert captured == [None]
+    assert dev.packet_log == [], "packet_log must stay empty when no packet was ever passed to transmit()"
+
+
+def test_transmit_with_packet_stamps_active_tx_and_logs_on_completion():
+    env = simpy.Environment()
+    ch = make_channel(env)
+    cfg = Config_Generic()
+    dev = GenericWirelessDevice(env, "GEN1", ch, cfg, pos=(0.0, 0.0))
+
+    pkt = Packet(packet_id="p1", source="GEN1", destination="GEN2",
+                 payload_bytes=100, header_bytes=20, created_at=0.0)
+    captured = []
+
+    def run():
+        proc = env.process(dev.transmit(duration_us=1000, packet=pkt))
+        yield env.timeout(10)
+        captured.append(dev.active_tx.packet)
+        yield proc
+
+    env.process(run())
+    env.run(until=5000)
+
+    assert captured == [pkt], "ActiveTx.packet should carry the exact Packet instance passed to transmit()"
+    assert dev.packet_log == [pkt], "packet_log should record the packet once transmit() completes uninterrupted"
+
+
+def test_transmit_with_packet_interrupted_does_not_log():
+    # Mirrors the tx_log success=False path (8.G/9.B convention): a
+    # transmission cut short mid-flight must NOT land in packet_log,
+    # same as it's excluded from any "delivered" bookkeeping elsewhere.
+    env = simpy.Environment()
+    ch = make_channel(env)
+    cfg = Config_Generic()
+    dev = GenericWirelessDevice(env, "GEN1", ch, cfg, pos=(0.0, 0.0))
+
+    pkt = Packet(packet_id="p1", source="GEN1", destination="GEN2",
+                 payload_bytes=100, header_bytes=20, created_at=0.0)
+
+    gen = dev.transmit(duration_us=10000, packet=pkt)
+    env.process(gen)
+    env.run(until=4000)  # well before the 10000us transmission finishes
+    gen.close()
+
+    assert dev.packet_log == [], "an interrupted transmission's packet must not be logged"
+    assert len(dev.tx_log) == 1 and dev.tx_log[0][3] is False
+
+
+def test_sniff_surfaces_packet_from_another_nodes_active_tx():
+    env = simpy.Environment()
+    ch = make_channel(env)
+    cfg = Config_Generic(f_hz=5.18e9, bandwidth_mhz=20.0)
+
+    pkt = Packet(packet_id="p1", source="OTHER", destination="GEN1",
+                 payload_bytes=100, header_bytes=20, created_at=0.0)
+    other = ActiveTx(
+        tx_id="OTHER", tx_pos=(1.0, 0.0), rx_pos=(2.0, 0.0), tx_start=0,
+        tx_power_dbm=20.0, f_hz=5.18e9, pl_exp=3.0, t_end=100000, tech="WiFi",
+        bandwidth_mhz=20.0, packet=pkt,
+    )
+    ch.register_tx(other)
+
+    dev = GenericWirelessDevice(env, "GEN1", ch, cfg, pos=(0.0, 0.0))
+    snap = dev.sniff()
+
+    assert len(snap.visible_txs) == 1
+    assert snap.visible_txs[0].packet is pkt, "sniff() should surface the other node's real Packet via VisibleTx.packet"
+
+
+def test_sniff_visible_tx_packet_is_none_when_not_carried():
+    # Default/no-packet ActiveTx (every wifi.py/nru.py ACK-less legacy
+    # call before 9.B, or any generic transmit() without packet=) must
+    # surface as packet=None, not error/omit the field.
+    env = simpy.Environment()
+    ch = make_channel(env)
+    cfg = Config_Generic(f_hz=5.18e9, bandwidth_mhz=20.0)
+
+    other = ActiveTx(
+        tx_id="OTHER", tx_pos=(1.0, 0.0), rx_pos=(2.0, 0.0), tx_start=0,
+        tx_power_dbm=20.0, f_hz=5.18e9, pl_exp=3.0, t_end=100000, tech="WiFi",
+        bandwidth_mhz=20.0,
+    )
+    ch.register_tx(other)
+
+    dev = GenericWirelessDevice(env, "GEN1", ch, cfg, pos=(0.0, 0.0))
+    snap = dev.sniff()
+
+    assert len(snap.visible_txs) == 1
+    assert snap.visible_txs[0].packet is None
+# Rashed-Step 9.B-08-07-2026-end
 
 
 def test_mobile_device_position_changes_over_time():

@@ -626,8 +626,17 @@ class Gnb:
             tech="NRU",
             # Rashed-Step 5.C-02-06-2026-start
             bandwidth_mhz=self.config_nr.bandwidth_mhz,
-            noise_figure_db=self.config_nr.noise_figure_db
+            noise_figure_db=self.config_nr.noise_figure_db,
             # Rashed-Step 5.C-02-06-2026-end
+            # Rashed-Step 9.B-08-07-2026-start
+            # Same bugfix as wifi.WiFi.send_frame() - see that
+            # construction site's comment for the full rationale.
+            # self.transmission_to_send.packet is already populated by
+            # gen_new_transmission() (Step 8.B), just never threaded
+            # through to the ActiveTx that actually gets registered on
+            # the shared channel until now.
+            packet=self.transmission_to_send.packet,
+            # Rashed-Step 9.B-08-07-2026-end
         )
         # Rashed-Step 4.B_4-01-20-2026-start
         #print(self.env.now, self.name, "TX->RX d=", dist(self.pos, rx_pos))

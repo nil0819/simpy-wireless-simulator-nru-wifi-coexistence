@@ -64,6 +64,9 @@ import simpy
 
 from common.common_phy import Pos, dist, rx_power_dbm, WaypointMobility
 from channel.channel import Channel, ActiveTx
+# Rashed-Step 9.B-08-07-2026-start
+from common.packet import Packet
+# Rashed-Step 9.B-08-07-2026-end
 
 
 @dataclass
@@ -98,6 +101,25 @@ class VisibleTx:
     f_hz: float
     distance_m: float
     rx_power_dbm: float
+    # Rashed-Step 9.B-08-07-2026-start
+    # The actual Packet this transmission is carrying, if the sender
+    # populated one on its ActiveTx (wifi.WiFi/nru.Gnb both do, as of
+    # this same sub-step - see their send_frame()/send_transmission()).
+    # None for anything that didn't - a generic device's own transmit()
+    # call with no packet= given, or attacker/*.py transmissions (out
+    # of scope, never wired up). Surfaced UNCONDITIONALLY whenever
+    # present, same policy as every other VisibleTx field - this class
+    # has never modeled a distance/SINR-gated "can this device actually
+    # decode it" cutoff for any field, packet included; a passive
+    # sniffer here sees full metadata for everything in
+    # channel.active_txs regardless of how far away or how weak the
+    # signal is. Real per-technology *decode success* (was this
+    # specific frame received correctly) is a different, separate
+    # question already answered by SINR in wifi.py/nru.py's own success
+    # logic - this is a monitor seeing "what's out there", not itself
+    # reproducing anyone else's receiver chain.
+    packet: Optional[Packet] = None
+    # Rashed-Step 9.B-08-07-2026-end
 
 
 @dataclass
@@ -154,6 +176,27 @@ class GenericWirelessDevice:
         # None otherwise. Exposed mainly so estimate_sinr_db() has a
         # sensible default target.
         self.active_tx: Optional[ActiveTx] = None
+
+        # Rashed-Step 9.B-08-07-2026-start
+        # Every Packet this device has transmit()'d to completion (i.e.
+        # the transmission window elapsed without the simulation ending
+        # mid-flight - see transmit()). Kept SEPARATE from tx_log rather
+        # than adding a 5th element to its existing 4-tuple shape, since
+        # test/test_generic_device.py already destructures tx_log
+        # entries positionally as (t_start, t_end, tech, success) -
+        # changing that shape would break those tests for no benefit.
+        # Mirrors wifi.WiFi/nru.Gnb's own packet_log (Step 8.G) in name
+        # and spirit, but NOTE the semantics are different: this class
+        # has no MAC/receive/ACK logic at all (see module docstring), so
+        # "completed" here just means "this device's own transmit()
+        # call finished uninterrupted" - it says nothing about whether
+        # anyone actually received/decoded the packet, unlike wifi.py/
+        # nru.py's packet_log entries, which are only appended after a
+        # real SINR-based success/failure decision. Callers/subclasses
+        # that want delivery semantics need to build that themselves
+        # (e.g. via estimate_sinr_db()).
+        self.packet_log: List[Packet] = []
+        # Rashed-Step 9.B-08-07-2026-end
 
     def current_pos(self) -> Pos:
         if self.mobility is not None:
@@ -219,6 +262,10 @@ class GenericWirelessDevice:
             visible.append(VisibleTx(
                 tx_id=tx.tx_id, tech=tx.tech, f_hz=tx.f_hz,
                 distance_m=d, rx_power_dbm=rx_dbm,
+                # Rashed-Step 9.B-08-07-2026: tx.packet is None unless
+                # the sender populated it - see VisibleTx.packet's
+                # comment.
+                packet=tx.packet,
             ))
 
         return SpectrumSnapshot(
@@ -233,7 +280,11 @@ class GenericWirelessDevice:
     # Transmitter
     # ------------------------------------------------------------------
     def transmit(self, duration_us: float, rx_pos: Optional[Pos] = None,
-                 tech_label: Optional[str] = None, tx_power_dbm: Optional[float] = None):
+                 tech_label: Optional[str] = None, tx_power_dbm: Optional[float] = None,
+                 # Rashed-Step 9.B-08-07-2026-start
+                 packet: Optional[Packet] = None
+                 # Rashed-Step 9.B-08-07-2026-end
+                 ):
         """
         SimPy process - start with env.process(device.transmit(...)).
 
@@ -249,6 +300,18 @@ class GenericWirelessDevice:
         nothing is meant to "receive" it. Any other node can still
         evaluate SINR against this transmission via channel.sinr_db()
         since it's a completely normal ActiveTx like WiFi/NR-U/NR's.
+
+        # Rashed-Step 9.B-08-07-2026-start
+        packet: optional - None (default, unchanged from every pre-9.B
+        call) means this transmission carries no Packet identity, same
+        as before. Pass one to stamp it onto this transmission's
+        ActiveTx (so other nodes' sniff() calls can see it - see
+        VisibleTx.packet) and to have it appended to self.packet_log on
+        successful (uninterrupted) completion. Enables future subclasses
+        (e.g. a replay attacker re-transmitting a packet captured via
+        sniff()) to carry real packet identity through transmit()
+        without needing to reimplement the ActiveTx plumbing themselves.
+        # Rashed-Step 9.B-08-07-2026-end
         """
         tech = tech_label if tech_label is not None else self.config.tech_label
         power = tx_power_dbm if tx_power_dbm is not None else self.config.tx_power_dbm
@@ -267,6 +330,9 @@ class GenericWirelessDevice:
             tech=tech,
             bandwidth_mhz=self.config.bandwidth_mhz,
             noise_figure_db=self.config.noise_figure_db,
+            # Rashed-Step 9.B-08-07-2026-start
+            packet=packet,
+            # Rashed-Step 9.B-08-07-2026-end
         )
         self.channel.register_tx(active)
         self.active_tx = active
@@ -275,6 +341,17 @@ class GenericWirelessDevice:
             yield self.env.timeout(duration_us)
             self.channel.unregister_tx(active, success=True)
             self.tx_log.append((tx_start, active.t_end, tech, True))
+            # Rashed-Step 9.B-08-07-2026-start
+            # Only logged on the uninterrupted-completion path, not the
+            # except branch below - mirrors wifi.WiFi/nru.Gnb's
+            # packet_log convention of only recording a terminal
+            # outcome, not one still "in flight" when the sim ended.
+            # NOTE this does NOT mean "delivered" in the SINR-confirmed
+            # sense wifi.py/nru.py use - see this method's docstring and
+            # packet_log's __init__ comment for why.
+            if packet is not None:
+                self.packet_log.append(packet)
+            # Rashed-Step 9.B-08-07-2026-end
         except BaseException:
             # Same GeneratorExit-safe pattern as wifi.WiFi.send_frame() /
             # nru.Gnb.send_transmission() (Step 5.I): purely synchronous
