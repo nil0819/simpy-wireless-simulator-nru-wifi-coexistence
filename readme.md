@@ -1,163 +1,155 @@
 # Simpy Enabled Wireless Simulator
 
 ## Intro
-Simulator created for based on the master thesis `Jakub_Cichon_Master_s_Thesis.pdf` by Jakub Cichoń which was based on two existing implementations:
+Simulator created based on the master thesis `Jakub_Cichon_Master_s_Thesis.pdf` by Jakub Cichoń, which was based on two existing implementations:
 * [Wi-Fi simulator](https://github.com/ToporPawel/DCF-Simpy)
 * [NR-U simulator](https://github.com/marekzajac97/nru-channel-access)
+
+This branch (`improved-simulator-2025`) extends that original process/collision-count-based simulator with a real physical layer (path loss, shadowing, SINR/capture-effect success decisions, per-technology MCS/frequency/bandwidth modeling, regulatory EIRP checks, node mobility), a shared real-packet abstraction (queueing/traffic models, retries, ACKs, latency/loss/jitter statistics), a protocol-agnostic generic wireless node usable as a spectrum analyzer or an attack base class, and packet-level attacker capabilities (spoofing, replay) - on top of the original Wi-Fi/NR-U CSMA/LBT coexistence logic, without changing that original access-protocol behavior. See "Project details/" for the full, chronological design/verification log of every change (one `Step N.txt` file per major step, each with a `DONE` section per sub-step listing exactly what changed and how it was verified).
 
 ## Installation
 
 - (Optional) Launch virtual env: `python3 -m venv env && source env/bin/activate`
-- Install requirements : `pip install -r requirements.txt`
-- The following libraries are required
-  - Click
+- Install requirements: `pip install -r requirements.txt`
+- Requirements (see `requirements.txt`):
+  - click
   - simpy
   - pandas
   - matplotlib
   - scipy
 
-
-  We are targetting to implement real world settings in this simulator in stead of it being a process based simulator. 
-
 ## Structure
 
+Four independent, runnable scenarios, each with its own CLI entry point and its own `simulation_*.py` driver. They share the same underlying PHY/channel model but are kept separate on purpose (a "standalone first" convention followed since Step 6.B), so extending one scenario never risks the others' already-verified behavior:
 
-`singleRun.py` and `changingNodesNumber.py` - scripts used for running simulations scenarios
+| Scenario | CLI entry point | Driver |
+|---|---|---|
+| Wi-Fi + NR-U unlicensed coexistence (the main scenario) | `singleRun.py` | `simulation.py` |
+| Licensed 5G NR (standalone, full RB scheduler) | `singleRunNR.py` | `simulation_nr.py` |
+| Passive spectrum-analyzer sniffers over real Wi-Fi/NR-U traffic | `singleRunSpectrum.py` | `simulation_spectrum.py` |
+| Packet-level attacker (spoofing/replay) over real Wi-Fi/NR-U traffic | `singleRunAttacker.py` | `simulation_attacker.py` |
 
-
-
+Code layout:
+```
+common/common.py       - shared constants, Pos type, rand_pos(), Frame, log()
+common/common_phy.py   - path loss, shadowing, thermal noise, MCS/SINR tables,
+                          spectral overlap, EIRP caps, WaypointMobility
+common/packet.py        - Packet/TrafficConfig, latency/loss/jitter stats,
+                          packet-level CSV export
+channel/channel.py      - Channel: tx queues, ActiveTx, CCA/ED sensing, SINR
+wifi/wifi.py, wifi/sta.py       - Wi-Fi AP + STA (CSMA/CA)
+nru/nru.py, nru/ue.py           - NR-U gNB + UE (Cat-4 LBT, unlicensed)
+nr/nr.py, nr/ue.py              - Licensed 5G NR gNB + UE (scheduled, no LBT)
+generic/generic_device.py       - GenericWirelessDevice: protocol-agnostic
+                                   sniff()/transmit() base class (spectrum
+                                   analyzer, attacker base, or a custom-
+                                   protocol node)
+attacker/packet_attacker.py     - PacketAttacker (spoof/replay), built on
+                                   GenericWirelessDevice
+attacker/roguewificad.py,
+attacker/roguewifijammer.py,
+attacker/roguewifiselfbackoff.py - CAD-attack-paper-related attacker models
+                                    (roguewificad.py is wired into
+                                    singleRun.py's --rogue flag; the other
+                                    two are standalone/not currently wired in)
+test/                            - assert-based regression test suite
+                                    (run via `pytest test/` or
+                                    `python test/test_X.py` directly)
+Project details/                 - design/verification log, one Step N.txt
+                                    per major step, plus a top-level
+                                    "STATUS - resume context.txt"
+```
 
 ## Usage
 
-This project is using `click` library to execute the program with pre defined simulation scenarios. For each of the possible scenarios there is a help function.
+Every scenario supports `--help` for its full, current flag list - the summaries below are grouped by feature area rather than reproduced in full, since the underlying flag set has grown substantially since Steps 5-9 and is easiest to keep accurate by reading directly from `--help`.
 
-### Single run
-Running single run of simulation with desired parameters. In default repeated 10 times (runs).
+### Wi-Fi + NR-U coexistence (`singleRun.py`)
+
+The main scenario: Wi-Fi APs (CSMA/CA) and NR-U gNBs (Cat-4 LBT) contending for the same 5 GHz unlicensed spectrum.
 
 ```bash
 python singleRun.py --help
-Usage: singleRun.py [OPTIONS]
-
-Options:
-  -r, --runs INTEGER              Number of simulation runs
-  --seed INTEGER                  Seed for simulation
-  --ap-number INTEGER             Number of Wi-Fi stations  [required]
-  --gnb-number INTEGER            Number of NR-U gNBs  [required]
-  -t, --simulation-time FLOAT     Duration of the simulation per stations
-                                  number in s
-  --wifi_cw_min INTEGER           Size of Wi-Fi cw min
-  --wifi_cw_max INTEGER           Size of Wi-Fi cw max
-  --nru_cw_min INTEGER            Size of NR-U cw min
-  --nru_cw_max INTEGER            Size of NR-U cw max
-  --wifi_r_limit INTEGER          Number of failed transmissions in a row
-  -m, --mcs-value INTEGER         Value of mcs
-  -syn_slot, --synchronization_slot_duration INTEGER
-                                  Synchronization slot length in mikrosecounds
-  -max_des, --max_sync_slot_desync INTEGER
-                                  Max value of gNB desynchronization
-  -min_des, --min_sync_slot_desync INTEGER
-                                  Min value of gNB desynchronization
-  -nru_obser_slots, --nru_observation_slot INTEGER
-                                  amount of observation slots for NR_U
-  --mcot INTEGER                  Max channel occupancy time for NR-U (ms)
-  --help                          Show this message and exit.
-
 ```
-### Branches
 
-- cad-attack-model-1-version1 - Channel access deterence attack model 1 (deterministic approach)
-- cad-resilience-model-RS-gap-hybrid-model-2- Hybrid RS-Gap based Resilience Strategy against CAD attack 
+Flag groups (see `--help` for exact names/defaults/full descriptions):
+- **Topology**: `--ap-number`/`--gnb-number` (required), `--area-w`/`--area-h`, `--ap-pos`/`--gnb-pos` (explicit placement), `--sta-radius`/`--ue-radius`
+- **MAC parameters**: `--wifi_cw_min`/`--wifi_cw_max`/`--nru_cw_min`/`--nru_cw_max`, `--wifi_r_limit`/`--nru_r_limit`, `-m`/`--mcs-value`, `--mcot`, `-syn_slot`, `-max_des`/`-min_des`, `-nru_obser_slots`
+- **PHY realism (Step 5)**: `--shadowing-sigma-db`, `--wifi-bandwidth-mhz`/`--nru-bandwidth-mhz`, `--wifi-noise-figure-db`/`--nru-noise-figure-db`, `--nru-mcs`, `--wifi-sinr-thr-db-override`/`--nru-sinr-thr-db-override`, `--wifi-freq-ghz`/`--nru-freq-ghz`, `--wifi-tx-power-dbm`/`--nru-tx-power-dbm` (checked against FCC U-NII EIRP caps at startup, warning only)
+- **Mobility (Step 5.G)**: `--ap-mobility-speed-mps`, `--gnb-mobility-speed-mps`, `--sta-mobility-speed-mps`, `--ue-mobility-speed-mps`, `--mobility-pause-s`
+- **Traffic model / real packets (Step 8)**: `--wifi-traffic-model`/`--nru-traffic-model` (`saturated`/`poisson`/`cbr`), `--wifi-arrival-rate-pps`/`--nru-arrival-rate-pps`, `--wifi-packet-size-bytes`/`--nru-packet-size-bytes`
+- **Packet-level CSV export (Step 9.D)**: `--export-packets-csv <path>` - appends one row per packet (technology, node, id, source/destination, sizes, status, latency) for offline analysis
+- **Rogue AP**: `--rogue True` (routes AP traffic through `attacker/roguewificad.py`'s CAD-attack model instead of benign Wi-Fi)
 
-
-##### Usage
+Example:
 ```bash
-python singleRun.py --ap-number 2 --gnb-number 2 -t 10 -r 1
-
-python singleRun.py --ap-number 1 --gnb-number 1 -t 10 -r 1 --mcot 10 -syn_slot 500
-
-python singleRun.py --ap-number 1 --gnb-number 1 -t 10 -r 1 --mcot 10 -syn_slot 500 --rogue True
-
-python singleRun.py --ap-number 1 --gnb-number 1 -t 3 -r 1 --mcot 10 -syn_slot 500 --rogue True
-
+python singleRun.py --ap-number 2 --gnb-number 2 -t 1 -r 1
 python singleRun.py --ap-number 1 --gnb-number 1 -t 1 -r 1 --mcot 10 -syn_slot 500 --rogue True
-
-
-python singleRun.py --ap-number 1 --gnb-number 1 -t 1 -r 1 --mcot 10 -syn_slot 500 --rogue True -wifi_cw_min 1 -wifi_cw_max 1
-
-
+python singleRun.py --ap-number 2 --gnb-number 1 -t 0.1 --area-w 50 --area-h 50 --seed 1 --shadowing-sigma-db 4 --ap-mobility-speed-mps 1.4 --wifi-traffic-model poisson --export-packets-csv packets.csv
+```
+Sample output (2 AP / 2 gNB, defaults):
+```
 SEED = 1 N_stations:=2 N_gNB:=2  CW_MIN = 15 CW_MAX = 63 WiFi pcol:=0.1217 WiFi cot:=0.8879164 WiFi eff:=0.88074 gNB pcol:=0.0000 gNB cot:=0.0354 gNB eff:=0.0354  all cot:=0.9233164 all eff:=0.91614
  Wifi succ: 1631 fail: 226
  NR succ: 59 fail: 0
 fairness: 0.5398053473945499
 joint: 0.4984111300570852
 ```
+(Plus, since Step 8.G/9.A, per-technology and per-node packet stats: delivery/loss counts, average/min/max/stddev/jitter/p50/p95/p99 latency.)
 
+### Licensed 5G NR, standalone (`singleRunNR.py`)
 
-
-### Changing number of nodes
-
-Running simulations in which number of Wi-Fi nodes (AP) is equal to number of NR-U nodes (gNB), and is increasing in every step from start to the end value (can be repeated with different seeds)
+A full-scheduler licensed-spectrum NR gNB/UE model (round-robin or proportional-fair RB scheduling, numerology-based slot timing, no LBT) - built and verified standalone (Step 6.B), not integrated into the unlicensed coexistence scenario above.
 
 ```bash
-python changingNodesNumber.py --help
-Usage: changingNodesNumber.py [OPTIONS]
-
-Options:
-  -r, --runs INTEGER              Number of simulation runs
-  --seed INTEGER                  Seed for simulation
-  --start_node_number INTEGER     Starting number of Wi-Fi and NR-U nodes
-                                  [required]
-  --end_node_number INTEGER       Ending number of Wi-Fi and NR-U nodes
-                                  [required]
-  -t, --simulation-time FLOAT     Duration of the simulation per stations
-                                  number in s
-  --wifi_cw_min INTEGER           Size of Wi-Fi cw min
-  --wifi_cw_max INTEGER           Size of Wi-Fi cw max
-  --nru_cw_min INTEGER            Size of NR-U cw min
-  --nru_cw_max INTEGER            Size of NR-U cw max
-  --wifi_r_limit INTEGER          Number of failed transmissions in a row
-  -m, --mcs-value INTEGER         Value of mcs
-  -syn_slot, --synchronization_slot_duration INTEGER
-                                  Synchronization slot length in mikrosecounds
-  -max_des, --max_sync_slot_desync INTEGER
-                                  Max value of gNB desynchronization
-  -min_des, --min_sync_slot_desync INTEGER
-                                  Min value of gNB desynchronization
-  -nru_obser_slots, --nru_observation_slot INTEGER
-                                  amount of observation slots for NR_U
-  --mcot INTEGER                  Max channel occupancy time for NR-U (ms)
-  --help                          Show this message and exit.
-
+python singleRunNR.py --help
+python singleRunNR.py --gnb-number 1 --ues-per-gnb 4 -t 1 --scheduler proportional_fair
 ```
 
-##### Usage
+### Spectrum analyzer (`singleRunSpectrum.py`)
+
+Drops passive `GenericWirelessDevice` sniffer nodes (Step 7.A/7.B) into a real Wi-Fi + NR-U topology and periodically samples the channel (wideband/in-band energy, busy fraction, per-technology duty cycle) - the same way a real spectrum analyzer would, with no privileged access to the simulator's internal bookkeeping.
+
 ```bash
-python changingNodesNumber.py --start_node_number 1 --end_node_number 2 -t 10 -r 1
-SEED = 1 N_stations:=1 N_gNB:=1  CW_MIN = 15 CW_MAX = 63 WiFi pcol:=0.0006 WiFi cot:=0.955422 WiFi eff:=0.9477 gNB pcol:=0.0244 gNB cot:=0.024 gNB eff:=0.024  all cot:=0.979422 all eff:=0.9717
- Wifi succ: 1755 fail: 1
- NR succ: 40 fail: 1
-fairness: 0.5251039493099016
-joint: 0.5142983602410024
-SEED = 1 N_stations:=2 N_gNB:=2  CW_MIN = 15 CW_MAX = 63 WiFi pcol:=0.1217 WiFi cot:=0.8879164 WiFi eff:=0.88074 gNB pcol:=0.0000 gNB cot:=0.0354 gNB eff:=0.0354  all cot:=0.9233164 all eff:=0.91614
- Wifi succ: 1631 fail: 226
- NR succ: 59 fail: 0
-fairness: 0.5398053473945499
-joint: 0.4984111300570852
+python singleRunSpectrum.py --help
+python singleRunSpectrum.py --ap-number 2 --gnb-number 1 --sniffer-number 2 -t 1
 ```
 
-#### Current Work Status
+### Packet-level attacker (`singleRunAttacker.py`)
 
+Drops `PacketAttacker` nodes (Step 9.C, built on `GenericWirelessDevice`) into a real Wi-Fi + NR-U topology, driven through a capture -> spoof -> replay timeline: passively sniffs real traffic, then transmits packets with a forged source identity and/or re-transmits exact captured content, from the attacker's own real physical position/power. Prints real Wi-Fi/NR-U succ/fail counts alongside the attack results, so the attack's actual channel-level impact (airtime, SINR degradation for legitimate traffic) is directly comparable to a no-attack run.
+
+```bash
+python singleRunAttacker.py --help
+python singleRunAttacker.py --ap-number 2 --gnb-number 1 -t 0.1 --spoof-target "AP 1" --spoof-count 5 --replay-max 3
+```
+
+## Testing
+
+Assert-based regression suite (no print-and-eyeball scripts for anything added since Step 5.H) - covers PHY primitives, the packet system, `GenericWirelessDevice`, and `PacketAttacker`:
+```bash
+pip install pytest
+pytest test/
+```
+83 tests passing as of Step 9.D. Individual files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+
+## Current Work Status
 
 ----> Step 1 — Add topology + distance (positions)
 ----> Step 2 — Add path loss + received power (RSSI)
 ----> Step 3 — Per-node CCA / ED-based channel sensing
-----> Step 4 — Hidden/exposed terminal + SINR-based success/failure (mostly done, in progress)
+----> Step 4 — Hidden/exposed terminal + SINR-based success/failure
 ----> Step pre_5 — Bug fixes: multi-AP/gNB topology, WiFi airtime reporting, MCS-based frame duration, rogue AP reconnected onto ED/SINR pipeline
+----> Step 5 (5.A-5.I) — PHY realism: configurable placement, log-normal shadowing, real thermal noise floor, MCS-adaptive SINR thresholds, frequency/spectral-overlap-aware interference and CCA, per-technology tx queues, regulatory EIRP caps, node mobility, PHY unit test suite, GeneratorExit fix
+----> Step 6 (6.A-6.E) — Real same-technology collisions (removed tx_queue serialization), standalone licensed 5G NR mode (full scheduler), airtime-undercounting-race bugfix, benign-scenario validation against a published CAD-paper DTMC model, full regression pass
+----> Step 7 (7.A-7.C) — GenericWirelessDevice (protocol-agnostic sniff()/transmit() base class), spectrum-analyzer CLI scenario, shadowing/mobility/EIRP parity for that scenario
+----> Step 8 (8.A-8.G) — Real Packet abstraction: Packet/TrafficConfig data structures, per-node queue with saturated/poisson/cbr traffic models, packet-size-driven Wi-Fi PPDU duration, NR-U retry-limit parity fix, r_limit-exceeded queue-routing fix, real ACK packets, latency/loss stats collector
+----> Step 9 (9.A-9.D) — Extended traffic analytics (jitter/percentile latency/per-node breakdown), real Packet visibility wired into GenericWirelessDevice, packet-level attacker capabilities (spoofing + replay, PacketAttacker + a full runnable scenario), packet-level CSV export
+----> Step pre_10 — readme.md full refresh to reflect Steps 5-9
 
-#### Citation1
+Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 
-
-
+#### Citation
 
 
 Please consider citing the following works if relevant to your research
@@ -165,8 +157,3 @@ Please consider citing the following works if relevant to your research
 - [1] Rahman, Md Rashedur, and Moinul Hossain. "Rancad: Random channel access deterrence attack against spectrum coexistence between nr-u and wi-fi on the 5ghz unlicensed band." ICC 2024-IEEE International Conference on Communications. IEEE, 2024.
 - [2] Rahman, Md Rashedur, et al. "Channel Access Deterrence Attack: An Attack against Spectrum Coexistence between NR-U and Wi-Fi in the 5 GHz Band." Proceedings of IEEE INFOCOM 2025, IEEE, 2025.
 - [3] J. Cichon. A Wi-Fi and NR-U Coexistence Channel Access Simulator based on the Python SimPy Library. [Online]. Available: https://github.com/CichonJakub/5G-Coexistence-SimPy.
-
-
-
-
-
