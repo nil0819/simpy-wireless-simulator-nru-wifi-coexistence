@@ -23,11 +23,17 @@ from common.packet import (
     Packet, TrafficConfig, compute_packet_stats, compute_packet_stats_by_node,
     packet_to_csv_row, export_packets_csv, PACKET_CSV_HEADER,
     QOS_TRAFFIC_CLASSES, traffic_class_priority_rank, pick_traffic_class,
+    # Rashed-Step 10.B-08-07-2026-start
+    EdcaAcParams, DEFAULT_EDCA_PARAMS,
+    # Rashed-Step 10.B-08-07-2026-end
 )
 from common.common import Frame
 from channel.channel import ActiveTx, Channel
 from nru.nru import Transmission_NR, Gnb, Config_NR
 from wifi.wifi import WiFi, Config
+# Rashed-Step 10.B-08-07-2026-start
+from Times import Times
+# Rashed-Step 10.B-08-07-2026-end
 
 
 def test_packet_defaults():
@@ -558,6 +564,322 @@ def test_export_packets_csv_empty_logs_writes_only_header_no_rows():
 # Rashed-Step 9.D-08-07-2026-end
 
 
+# Rashed-Step 10.B-08-07-2026-start
+"""
+Step 10.B unit tests: real 802.11e EDCA differentiated channel access
+for Wi-Fi (Config.qos_enabled=True). Covers: DEFAULT_EDCA_PARAMS/
+Times.get_aifs_us() correctness against the 802.11e/WMM spec table;
+the qos_enabled=True + non-saturated-mode fail-fast guard;
+generate_new_back_off_slots_edca()'s CW bounds; wait_back_off_edca()'s
+virtual-collision tie resolution (winner picked by priority, losers'
+CW grown WITHOUT touching their packet's retry_count); sent_failed_
+edca()/sent_completed_edca()'s per-AC bookkeeping parity with the
+legacy sent_failed()/sent_completed(); and an end-to-end saturated
+smoke run confirming voice's much shorter AIFS/CW lets it dominate
+channel access over background under real contention, exactly the
+qualitative behavior real EDCA is supposed to produce.
+"""
+
+
+class _NoAutoStartWiFi(WiFi):
+    """
+    Same WiFi class, but with BOTH background driving loops (start()/
+    start_edca()) replaced by immediately-finishing no-op generators.
+    Used so a test can construct a real WiFi instance (real __init__,
+    real state, real config.qos_enabled fail-fast guard) without an
+    uncontrolled background contention process also running and
+    interleaving with whatever the test drives directly via
+    env.process(...)/env.run(until=...).
+    """
+    def start(self):
+        return
+        yield  # pragma: no cover - never reached, makes this a generator
+
+    def start_edca(self):
+        return
+        yield  # pragma: no cover - never reached, makes this a generator
+
+
+def _make_test_edca_wifi(qos_enabled=True, traffic_config=None):
+    """Same construction pattern as _make_test_wifi() above, but using
+    _NoAutoStartWiFi and defaulting qos_enabled=True (this module's
+    whole point), so tests can drive wait_back_off_edca()/
+    send_frame_edca()/sent_completed_edca()/sent_failed_edca()
+    directly and deterministically."""
+    env = simpy.Environment()
+    channel = Channel(
+        tx_queue=simpy.PriorityResource(env, capacity=1),
+        tx_lock=simpy.Resource(env, capacity=1),
+        n_of_stations=1,
+        n_of_gNB=0,
+        backoffs={},
+        airtime_data={},
+        airtime_control={},
+        airtime_data_NR={},
+        airtime_control_NR={},
+    )
+    channel.airtime_data["AP 1"] = 0
+    channel.airtime_control["AP 1"] = 0
+
+    class _FakeSta:
+        name = "STA 1-1"
+        def current_pos(self):
+            return (1.0, 0.0)
+
+    cfg = Config(qos_enabled=qos_enabled)
+    ap = _NoAutoStartWiFi(
+        env, "AP 1", channel, (0.0, 0.0), [_FakeSta()], cfg,
+        traffic_config=traffic_config if traffic_config is not None else TrafficConfig(mode="saturated"),
+    )
+    return env, ap
+
+
+def test_default_edca_params_match_80211e_wmm_spec_table():
+    # 802.11-2020 Table 9-155 default EDCA parameters (AC_VO/AC_VI/AC_BE/
+    # AC_BK) - see common/packet.py's DEFAULT_EDCA_PARAMS docstring.
+    assert DEFAULT_EDCA_PARAMS["voice"] == EdcaAcParams(cw_min=3, cw_max=7, aifsn=2)
+    assert DEFAULT_EDCA_PARAMS["video"] == EdcaAcParams(cw_min=7, cw_max=15, aifsn=2)
+    assert DEFAULT_EDCA_PARAMS["best_effort"] == EdcaAcParams(cw_min=15, cw_max=1023, aifsn=3)
+    assert DEFAULT_EDCA_PARAMS["background"] == EdcaAcParams(cw_min=15, cw_max=1023, aifsn=7)
+    assert set(DEFAULT_EDCA_PARAMS.keys()) == set(QOS_TRAFFIC_CLASSES)
+
+
+def test_get_aifs_us_matches_legacy_difs_for_aifsn_2():
+    # AIFSN=2 is exactly DCF's fixed DIFS - see Times.get_aifs_us()'s
+    # docstring. This is the anchor point tying EDCA's generalized
+    # formula back to the already-Bianchi-validated legacy constant.
+    assert Times.get_aifs_us(2) == Times.t_difs == 34
+
+
+def test_get_aifs_us_matches_spec_formula_for_other_aifsn():
+    # AIFS = AIFSN * aSlotTime(9) + aSIFSTime(16).
+    assert Times.get_aifs_us(3) == 3 * 9 + 16 == 43   # best_effort
+    assert Times.get_aifs_us(7) == 7 * 9 + 16 == 79   # background
+
+
+def test_wifi_config_qos_disabled_by_default():
+    assert Config().qos_enabled is False
+    assert Config().edca_params is None
+
+
+def test_wifi_qos_enabled_requires_saturated_traffic_mode():
+    try:
+        _make_test_edca_wifi(qos_enabled=True, traffic_config=TrafficConfig(mode="poisson", arrival_rate_pps=10.0))
+        assert False, "expected ValueError for qos_enabled=True + non-saturated mode"
+    except ValueError as e:
+        assert "saturated" in str(e)
+
+
+def test_wifi_qos_enabled_true_uses_default_edca_params_when_unset():
+    _, ap = _make_test_edca_wifi(qos_enabled=True)
+    assert ap.edca_params is DEFAULT_EDCA_PARAMS
+    assert set(ap.ac_frame_to_send.keys()) == set(QOS_TRAFFIC_CLASSES)
+    assert all(v is None for v in ap.ac_frame_to_send.values())
+    assert all(v == 0 for v in ap.ac_failed_in_row.values())
+
+
+def test_generate_new_back_off_slots_edca_respects_cw_bounds_no_failures():
+    _, ap = _make_test_edca_wifi()
+    # background: cw_min=15, 0 prior failures -> upper_limit = cw_min = 15.
+    for _ in range(200):
+        v = ap.generate_new_back_off_slots_edca("background")
+        assert 0 <= v <= 15
+
+
+def test_generate_new_back_off_slots_edca_grows_with_failures_and_caps_at_cw_max():
+    _, ap = _make_test_edca_wifi()
+    # voice: cw_min=3, cw_max=7. After enough failures, 2^k*(cw_min+1)-1
+    # exceeds cw_max=7, so the draw must be capped there.
+    ap.ac_failed_in_row["voice"] = 10
+    for _ in range(200):
+        v = ap.generate_new_back_off_slots_edca("voice")
+        assert 0 <= v <= 7
+
+
+def test_make_packet_for_ac_forces_traffic_class_with_zero_rng_footprint():
+    _, ap = _make_test_edca_wifi()
+    state_before = random.getstate()
+    p = ap._make_packet_for_ac("voice")
+    assert random.getstate() == state_before  # no traffic_class_mix draw involved
+    assert p.traffic_class == "voice"
+
+
+def test_refresh_ac_frame_builds_frame_with_packet_attached():
+    _, ap = _make_test_edca_wifi()
+    ap._refresh_ac_frame("video")
+    frame = ap.ac_frame_to_send["video"]
+    assert frame is not None
+    assert frame.packet is not None
+    assert frame.packet.traffic_class == "video"
+
+
+def test_wait_back_off_edca_virtual_collision_winner_is_higher_priority():
+    """
+    Force a genuine tie between voice (AIFSN=2, aifs=34us) and
+    background (AIFSN=7, aifs=79us): with voice backoff=5 slots
+    (34+5*9=79us) and background backoff=0 slots (79us), both windows
+    expire at exactly the same simulated instant. voice must win
+    (traffic_class_priority_rank favors it) and background's
+    ac_failed_in_row must grow by 1 as a virtual-collision loser -
+    while voice's own packet is untouched (no real transmission
+    attempt happened yet, this method only resolves who WINS the
+    right to transmit next).
+    """
+    env, ap = _make_test_edca_wifi()
+    ap._refresh_ac_frame("voice")
+    ap._refresh_ac_frame("background")
+    # video/best_effort intentionally left with no pending frame (None)
+    # so they don't participate in this contention episode at all -
+    # confirms wait_back_off_edca() only considers ACs with something
+    # to send.
+    assert ap.ac_frame_to_send["video"] is None
+    assert ap.ac_frame_to_send["best_effort"] is None
+
+    def fixed_backoff(ac):
+        return {"voice": 5, "background": 0}[ac]
+    ap.generate_new_back_off_slots_edca = fixed_backoff
+
+    proc = env.process(ap.wait_back_off_edca())
+    env.run(until=proc)
+    winner = proc.value
+
+    assert winner == "voice"
+    assert ap.ac_failed_in_row["background"] == 1
+    assert ap.ac_failed_in_row["voice"] == 0
+    # Virtual collision does not touch the packet itself.
+    assert ap.ac_frame_to_send["background"].packet.retry_count == 0
+    assert ap.ac_frame_to_send["background"].packet.status == "PENDING"
+
+
+def test_sent_failed_edca_increments_retry_count_and_grows_cw_without_drop():
+    _, ap = _make_test_edca_wifi()
+    ap._refresh_ac_frame("voice")
+    original_packet = ap.ac_frame_to_send["voice"].packet
+    ap.sent_failed_edca("voice")
+    assert ap.ac_frame_to_send["voice"].packet is original_packet  # same packet, retried
+    assert ap.ac_frame_to_send["voice"].packet.retry_count == 1
+    assert ap.ac_frame_to_send["voice"].number_of_retransmissions == 1
+    assert ap.ac_failed_in_row["voice"] == 1
+    assert ap.failed_transmissions == 1
+
+
+def test_sent_failed_edca_drops_and_refreshes_after_r_limit_exceeded():
+    _, ap = _make_test_edca_wifi()
+    ap._refresh_ac_frame("background")
+    original_packet = ap.ac_frame_to_send["background"].packet
+    for _ in range(ap.config.r_limit + 1):
+        ap.sent_failed_edca("background")
+    assert original_packet.status == "DROPPED"
+    assert original_packet in ap.packet_log
+    # A fresh packet/frame replaced the dropped one, and the failure
+    # streak reset for this AC.
+    assert ap.ac_frame_to_send["background"].packet is not original_packet
+    assert ap.ac_frame_to_send["background"].packet.traffic_class == "background"
+    assert ap.ac_failed_in_row["background"] == 0
+
+
+def test_sent_completed_edca_marks_delivered_and_builds_matching_ack():
+    _, ap = _make_test_edca_wifi()
+    ap._refresh_ac_frame("voice")
+    packet = ap.ac_frame_to_send["voice"].packet
+    ap.sent_completed_edca("voice")
+    assert packet.status == "DELIVERED"
+    assert packet in ap.packet_log
+    assert ap.ac_failed_in_row["voice"] == 0
+    ack = ap.ac_frame_to_send["voice"].ack_packet
+    assert ack is not None
+    assert ack.packet_type == "ACK"
+    assert ack.traffic_class == "voice"  # inherits the data packet's class
+    assert ap.succeeded_transmissions == 1
+
+
+def test_edca_saturated_run_favors_voice_over_background_under_contention():
+    """
+    End-to-end smoke run (real start_edca() this time, not the no-op
+    double): voice's much shorter AIFS(34us)/CW(3-7) vs background's
+    AIFS(79us)/CW(15-1023) should make voice complete dramatically more
+    deliveries in the same wall-clock window - the qualitative
+    behavior EDCA exists to produce. Uses the REAL WiFi class (not
+    _NoAutoStartWiFi) since this test wants the actual driving loop.
+    """
+    random.seed(7)
+    env = simpy.Environment()
+    channel = Channel(
+        tx_queue=simpy.PriorityResource(env, capacity=1),
+        tx_lock=simpy.Resource(env, capacity=1),
+        n_of_stations=1,
+        n_of_gNB=0,
+        # generate_new_back_off_slots() (legacy path) writes into this
+        # diagnostic histogram - EDCA's own generate_new_back_off_slots_
+        # edca() deliberately does NOT (see its docstring), but this test
+        # constructs a real WiFi via the normal constructor, so match
+        # singleRun.py's real initialization shape ({backoff_value:
+        # {n_of_stations: 0}}) instead of an empty dict, defensively.
+        backoffs={key: {1: 0} for key in range(Config().cw_max + 1)},
+        airtime_data={},
+        airtime_control={},
+        airtime_data_NR={},
+        airtime_control_NR={},
+    )
+    channel.airtime_data["AP 1"] = 0
+    channel.airtime_control["AP 1"] = 0
+
+    class _FakeSta:
+        name = "STA 1-1"
+        def current_pos(self):
+            return (1.0, 0.0)
+
+    ap = WiFi(env, "AP 1", channel, (0.0, 0.0), [_FakeSta()], Config(qos_enabled=True),
+              traffic_config=TrafficConfig(mode="saturated"))
+    env.run(until=200000)
+
+    from collections import Counter
+    counts = Counter(p.traffic_class for p in ap.packet_log)
+    assert counts["voice"] > counts.get("background", 0)
+    assert counts["voice"] > counts.get("best_effort", 0)
+    assert len(ap.packet_log) > 0
+
+
+def test_legacy_wifi_untouched_when_qos_disabled():
+    """
+    Regression guard: with qos_enabled left at its default (False), a
+    WiFi instance must still spawn the legacy start() process, not
+    start_edca() - confirmed indirectly here by checking the per-AC
+    EDCA state is initialized but never advanced (still all zeros/None)
+    after running the simulation for a while, since only the legacy
+    frame_to_send path should be active.
+    """
+    random.seed(3)
+    env = simpy.Environment()
+    channel = Channel(
+        tx_queue=simpy.PriorityResource(env, capacity=1),
+        tx_lock=simpy.Resource(env, capacity=1),
+        n_of_stations=1,
+        n_of_gNB=0,
+        backoffs={key: {1: 0} for key in range(Config().cw_max + 1)},
+        airtime_data={},
+        airtime_control={},
+        airtime_data_NR={},
+        airtime_control_NR={},
+    )
+    channel.airtime_data["AP 1"] = 0
+    channel.airtime_control["AP 1"] = 0
+
+    class _FakeSta:
+        name = "STA 1-1"
+        def current_pos(self):
+            return (1.0, 0.0)
+
+    ap = WiFi(env, "AP 1", channel, (0.0, 0.0), [_FakeSta()], Config(),
+              traffic_config=TrafficConfig(mode="saturated"))
+    env.run(until=50000)
+
+    assert ap.succeeded_transmissions > 0  # legacy path is doing real work
+    assert all(v is None for v in ap.ac_frame_to_send.values())  # EDCA path untouched
+    assert all(v == 0 for v in ap.ac_failed_in_row.values())
+# Rashed-Step 10.B-08-07-2026-end
+
+
 # Rashed-Step 8.A-08-06-2026-start
 if __name__ == "__main__":
     tests = [
@@ -597,6 +919,24 @@ if __name__ == "__main__":
         test_wifi_make_ack_packet_falls_back_to_best_effort_when_data_packet_none,
         test_nru_make_packet_defaults_to_best_effort_with_zero_rng_footprint,
         test_nru_make_packet_draws_from_configured_mix,
+        # Rashed-Step 10.B-08-07-2026-start
+        test_default_edca_params_match_80211e_wmm_spec_table,
+        test_get_aifs_us_matches_legacy_difs_for_aifsn_2,
+        test_get_aifs_us_matches_spec_formula_for_other_aifsn,
+        test_wifi_config_qos_disabled_by_default,
+        test_wifi_qos_enabled_requires_saturated_traffic_mode,
+        test_wifi_qos_enabled_true_uses_default_edca_params_when_unset,
+        test_generate_new_back_off_slots_edca_respects_cw_bounds_no_failures,
+        test_generate_new_back_off_slots_edca_grows_with_failures_and_caps_at_cw_max,
+        test_make_packet_for_ac_forces_traffic_class_with_zero_rng_footprint,
+        test_refresh_ac_frame_builds_frame_with_packet_attached,
+        test_wait_back_off_edca_virtual_collision_winner_is_higher_priority,
+        test_sent_failed_edca_increments_retry_count_and_grows_cw_without_drop,
+        test_sent_failed_edca_drops_and_refreshes_after_r_limit_exceeded,
+        test_sent_completed_edca_marks_delivered_and_builds_matching_ack,
+        test_edca_saturated_run_favors_voice_over_background_under_contention,
+        test_legacy_wifi_untouched_when_qos_disabled,
+        # Rashed-Step 10.B-08-07-2026-end
     ]
     passed = 0
     failed = 0

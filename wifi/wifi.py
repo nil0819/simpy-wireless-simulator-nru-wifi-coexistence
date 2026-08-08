@@ -25,6 +25,9 @@ from common.packet import Packet, TrafficConfig
 # Rashed-Step 10.A-08-07-2026-start
 from common.packet import pick_traffic_class
 # Rashed-Step 10.A-08-07-2026-end
+# Rashed-Step 10.B-08-07-2026-start
+from common.packet import QOS_TRAFFIC_CLASSES, traffic_class_priority_rank, EdcaAcParams, DEFAULT_EDCA_PARAMS
+# Rashed-Step 10.B-08-07-2026-end
 # Rashed-Step 8.B-08-06-2026-end
 
 
@@ -72,9 +75,106 @@ class Config:
     noise_figure_db: float = 7.0
     # Rashed-Step 5.C-02-06-2026-end
 
+    # Rashed-Step 10.B-08-07-2026-start
+    # False (default) = legacy single-CW/DIFS DCF contention, the exact
+    # code path (start()/wait_back_off()/send_frame()/sent_completed()/
+    # sent_failed()) every run before this step used - completely
+    # untouched by this flag, so unset is byte-identical to every
+    # pre-Step-10.B run. True switches this AP onto the parallel EDCA
+    # code path (start_edca() and friends) instead - see WiFi class
+    # docstring for the full scope (Wi-Fi only, SATURATED TRAFFIC ONLY
+    # for this first cut - see that docstring for why poisson/cbr EDCA
+    # is deliberately deferred).
+    qos_enabled: bool = False
+    # None (default) = DEFAULT_EDCA_PARAMS (the real 802.11e/WMM
+    # standard AC_VO/AC_VI/AC_BE/AC_BK values). Only read when
+    # qos_enabled is True. Set to override per-AC CWmin/CWmax/AIFSN
+    # (e.g. for an experiment comparing against non-standard values) -
+    # no CLI flag for this yet, programmatic-only for this first cut.
+    edca_params: Optional[Dict[str, EdcaAcParams]] = None
+    # Rashed-Step 10.B-08-07-2026-end
+
 
 
 class WiFi:
+    # Rashed-Step 10.B-08-07-2026-start
+    """
+    Step 10.B: EDCA (802.11e differentiated channel access) - opt-in via
+    Config.qos_enabled (default False = legacy single-CW/DIFS DCF,
+    completely unchanged).
+
+    SCOPE (confirmed with Rashed via AskUserQuestion before starting):
+    Wi-Fi only (802.11e is a real, documented standard; NR-U's
+    unlicensed LBT has no standardized QoS-differentiation equivalent -
+    left single-priority). Faithful per-AC virtual contention (not a
+    simplified single-queue priority scheme) - each of the 4 traffic
+    classes (voice/video/best_effort/background, i.e. AC_VO/AC_VI/
+    AC_BE/AC_BK) gets its OWN CWmin/CWmax/AIFSN and its own independent
+    backoff state, with "virtual collision" resolving ties exactly like
+    the real spec: when 2+ ACs' contention windows expire in the same
+    instant, the highest-priority one wins and actually transmits; the
+    losers grow their CW as if they'd suffered a real collision, but
+    their PACKET's retry_count is NOT incremented (no real over-the-air
+    attempt happened, so there's no risk of the peer ever seeing a
+    duplicate - this is a genuine, deliberate distinction from an
+    actual SINR/collision failure, not an oversight).
+
+    IMPLEMENTATION CHOICE: a SINGLE unified SimPy process
+    (start_edca()/wait_back_off_edca()) manages all 4 ACs' AIFS+backoff
+    countdown together in one synchronous loop, rather than 4
+    independent racing SimPy processes. This is a deliberate choice,
+    not a shortcut: 4 independent processes resuming at the exact same
+    env.now would need a separate cross-process synchronization barrier
+    to resolve virtual collisions correctly and deterministically, and
+    this project has hit real regressions before from subtle same-
+    instant SimPy scheduling-order effects (see Step 8.E). A single
+    process stepping all 4 counters together sidesteps that whole class
+    of risk while still being functionally faithful to the spec - this
+    is genuinely how one radio's MAC has to arbitrate 4 internal queues
+    against ONE shared physical channel anyway. Steps in 1us increments
+    throughout (both AIFS and backoff-slot phases, unlike the legacy
+    single-queue path's slot-sized backoff steps) so multiple
+    differently-timed AC countdowns can be advanced in lockstep - more
+    SimPy events than the legacy path, not a correctness concern at
+    this simulator's scale (the same 1us-stepping already happens
+    throughout every DIFS wait in the legacy path today). Freeze-on-
+    busy semantics match the legacy wait_back_off()'s own established
+    (simplified vs. the exact spec, but already-validated-against-
+    Bianchi - see Step 6.A) convention: a busy channel pauses and
+    RESUMES a countdown from wherever it was, it does not force a full
+    AIFS restart - kept consistent with the existing engine rather than
+    "fixed" to be more spec-pure, since that would be an unrelated,
+    out-of-scope behavioral change to already-validated non-EDCA logic.
+
+    NOT YET SUPPORTED (raises ValueError at construction if attempted -
+    see __init__):
+      - traffic_config.mode other than "saturated". EDCA-saturated
+        means all 4 ACs are ALWAYS treated as having a fresh packet
+        ready (4 simultaneous saturated sub-flows, one per AC) -
+        deliberately IGNORES traffic_class_mix (that field only governs
+        which single shared queue a legacy-DCF AP's packets are tagged
+        into, per Step 10.A) - this is the standard way EDCA
+        differentiation is evaluated in the literature (Bianchi-EDCA-
+        style per-AC saturation analysis) and the cleanest, most
+        tractable first cut. Real per-AC ARRIVAL-DRIVEN queueing
+        (poisson/cbr traffic routed into 4 independent queues, an AC
+        only contending once it actually has something queued) is a
+        real, meaningfully different piece of complexity - deferred to
+        a follow-up, not started here.
+      - TXOP bursting (a station transmitting multiple frames per won
+        contention opportunity) - single-frame-per-opportunity only,
+        matching every other technology in this simulator.
+      - No CLI-level per-AC CWmin/CWmax/AIFSN overrides yet - only the
+        on/off --wifi-edca flag; Config.edca_params is programmatically
+        overridable but not yet exposed per-parameter via CLI.
+      - The diagnostic-only channel.backoffs histogram (drawn-slot ->
+        count, used for "future analyzes" per its own comment) is not
+        populated by EDCA's backoff draws - it's indexed for a single
+        shared CW range, incompatible with 4 differently-ranged per-AC
+        distributions; a per-AC version could be added later if wanted.
+    """
+    # Rashed-Step 10.B-08-07-2026-end
+
     def __init__(
             self,
             env: simpy.Environment,
@@ -154,7 +254,32 @@ class WiFi:
         self.packet_log = []
         # Rashed-Step 8.G-08-06-2026-end
 
-        env.process(self.start())  # starting simulation process
+        # Rashed-Step 10.B-08-07-2026-start
+        # EDCA (qos_enabled=True) state - see WiFi class docstring for
+        # the full design. Constructed unconditionally (cheap, same
+        # "unused cost nothing" reasoning as self.packet_queue above)
+        # but only ever touched by the EDCA code path.
+        self.edca_params = config.edca_params if config.edca_params is not None else DEFAULT_EDCA_PARAMS
+        self.ac_frame_to_send: Dict[str, Optional[Frame]] = {ac: None for ac in QOS_TRAFFIC_CLASSES}
+        self.ac_failed_in_row: Dict[str, int] = {ac: 0 for ac in QOS_TRAFFIC_CLASSES}
+        if config.qos_enabled and self.traffic_config.mode != "saturated":
+            # Fail fast rather than silently produce undefined behavior -
+            # see class docstring's "NOT YET SUPPORTED" note. This is a
+            # deliberately scoped-down first EDCA cut, not a bug.
+            raise ValueError(
+                "WiFi: qos_enabled=True currently only supports "
+                "traffic_config.mode='saturated' (EDCA + poisson/cbr "
+                "queueing is a deferred follow-up - see Project details/"
+                "Step 10.txt's 10.B NOT DONE list)."
+            )
+        # Rashed-Step 10.B-08-07-2026-end
+
+        if config.qos_enabled:
+            # Rashed-Step 10.B-08-07-2026-start
+            env.process(self.start_edca())
+            # Rashed-Step 10.B-08-07-2026-end
+        else:
+            env.process(self.start())  # starting simulation process
         self.process = None  # waiting back off process
         self.channel.airtime_data.update({name: 0})
         self.channel.airtime_control.update({name: 0})
@@ -298,6 +423,242 @@ class WiFi:
             yield self.env.timeout(interval_us)
             yield self.packet_queue.put(self._make_packet())
     # Rashed-Step 8.B-08-06-2026-end
+
+    # Rashed-Step 10.B-08-07-2026-start
+    # ------------------------------------------------------------------
+    # EDCA (qos_enabled=True) - see WiFi class docstring for full scope.
+    # ------------------------------------------------------------------
+    def _make_packet_for_ac(self, ac: str) -> Packet:
+        """
+        Like _make_packet(), but FORCES traffic_class=ac directly - no
+        pick_traffic_class()/traffic_class_mix draw at all (no random
+        call, deterministic), since in EDCA-saturated mode the AC this
+        packet belongs to is already decided by which per-AC "slot"
+        called this - see class docstring on why traffic_class_mix is
+        deliberately ignored here.
+        """
+        self._packet_seq += 1
+        payload = self.traffic_config.packet_size_bytes if self.traffic_config.packet_size_bytes is not None else self.config.data_size
+        destination = self.sta_list[0].name if self.sta_list else self.name
+        return Packet(
+            packet_id=f"{self.name}-{ac}-{self._packet_seq:06d}",
+            source=self.name,
+            destination=destination,
+            payload_bytes=payload,
+            header_bytes=Times.mac_overhead // 8,
+            created_at=self.env.now,
+            traffic_class=ac,
+        )
+
+    def _refresh_ac_frame(self, ac: str):
+        """Synthesize a fresh packet+frame for AC `ac` and store it as
+        that AC's pending transmission - called once at EDCA startup for
+        every AC (all 4 start saturated) and again each time an AC's
+        current packet reaches a terminal state (DELIVERED or DROPPED -
+        see sent_completed_edca()/sent_failed_edca())."""
+        packet = self._make_packet_for_ac(ac)
+        frame = self.generate_new_frame(packet)
+        frame.packet = packet
+        self.ac_frame_to_send[ac] = frame
+
+    def generate_new_back_off_slots_edca(self, ac: str) -> int:
+        """
+        Same CW-growth formula as generate_new_back_off_slots() (kept
+        IDENTICAL on purpose, for consistency with the already-Bianchi-
+        validated non-EDCA model - see Step 6.A), just parametrized by
+        AC `ac`'s own cw_min/cw_max (from self.edca_params) and its own
+        independent ac_failed_in_row[ac] counter instead of the single
+        shared cw_min/cw_max/failed_transmissions_in_row the legacy path
+        uses. Deliberately does NOT write into self.channel.backoffs
+        (that diagnostic histogram is indexed for one shared CW range -
+        see class docstring's NOT YET SUPPORTED list).
+        """
+        params = self.edca_params[ac]
+        failed = self.ac_failed_in_row[ac]
+        upper_limit = pow(2, failed) * (params.cw_min + 1) - 1
+        upper_limit = upper_limit if upper_limit <= params.cw_max else params.cw_max
+        return random.randint(0, upper_limit)
+
+    def wait_back_off_edca(self):
+        """
+        Single unified contention episode across every AC that currently
+        has a pending frame (self.ac_frame_to_send[ac] is not None) -
+        see class docstring's "IMPLEMENTATION CHOICE" section for why
+        this is one process stepping 4 counters together rather than 4
+        independent racing processes. Returns the AC that won this
+        episode (its contention window expired first; ties broken by
+        traffic_class_priority_rank - lower rank wins). Every OTHER AC
+        whose window ALSO expired in the same instant (a "virtual
+        collision") has its ac_failed_in_row grown here before this
+        returns - the caller only needs to actually transmit for the
+        winner.
+        """
+        remaining_us = {}
+        for ac, frame in self.ac_frame_to_send.items():
+            if frame is None:
+                continue
+            params = self.edca_params[ac]
+            aifs_us = Times.get_aifs_us(params.aifsn)
+            backoff_slots = self.generate_new_back_off_slots_edca(ac)
+            remaining_us[ac] = aifs_us + backoff_slots * Times.t_slot
+
+        while True:
+            if self.channel.is_busy(self.current_pos(), self.config.ed_threshold_dbm, exclude_tx_id=self.name,
+                                     sense_f_hz=self.config.f_ghz, sense_bw_mhz=self.config.bandwidth_mhz):
+                log(self, "Channel busy during EDCA AIFS/backoff, waiting...")
+                yield self.channel.state_changed
+                continue
+            step = 1
+            yield self.env.timeout(step)
+            finished = []
+            for ac in remaining_us:
+                remaining_us[ac] -= step
+                if remaining_us[ac] <= 0:
+                    finished.append(ac)
+            if finished:
+                winner = min(finished, key=traffic_class_priority_rank)
+                for ac in finished:
+                    if ac != winner:
+                        # Virtual collision - CW grows exactly like a
+                        # real one, but the packet itself is untouched
+                        # (retry_count NOT incremented - no real
+                        # transmission attempt happened). See class
+                        # docstring.
+                        self.ac_failed_in_row[ac] += 1
+                return winner
+
+    def send_frame_edca(self, ac: str):
+        """
+        Same structure/SINR-decision/GeneratorExit-safety as the legacy
+        send_frame(), operating on self.ac_frame_to_send[ac] instead of
+        self.frame_to_send, calling sent_completed_edca(ac)/
+        sent_failed_edca(ac) instead of the plain ones. Kept as a fully
+        separate method (not a parametrized shared helper) so the
+        already-verified legacy path's code is never touched by this
+        change at all - see class docstring.
+        """
+        frame = self.ac_frame_to_send[ac]
+        log(self, f'Starting sending frame (EDCA {ac}): {frame.frame_time}')
+        tx_start = self.env.now
+        tx_pos = self.current_pos()
+        rx_pos = self.sta_list[0].current_pos() if self.sta_list else tx_pos
+        tx = ActiveTx(
+            tx_id=self.name,
+            tx_pos=tx_pos,
+            rx_pos=rx_pos,
+            tx_start=tx_start,
+            tx_power_dbm=self.config.tx_power_dbm,
+            f_hz=self.config.f_ghz,
+            pl_exp=self.config.pl_exp,
+            t_end=tx_start + frame.frame_time,
+            tech="WiFi",
+            bandwidth_mhz=self.config.bandwidth_mhz,
+            noise_figure_db=self.config.noise_figure_db,
+            packet=frame.packet,
+        )
+        self.channel.register_tx(tx)
+
+        was_sent = False
+        try:
+            yield self.env.timeout(frame.frame_time)
+            sinr = self.channel.sinr_db(tx)
+            required_sinr = self.required_sinr_db()
+            log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config.mcs}) = {required_sinr:.2f} dB (EDCA {ac})")
+            was_sent = (sinr >= required_sinr)
+
+            if was_sent:
+                self.sent_completed_edca(ac)
+            else:
+                self.sent_failed_edca(ac)
+            # Same same-instant-tie-break courtesy zero-duration yield as
+            # the legacy send_frame() - see its own comment.
+            yield self.env.timeout(0)
+            self.channel.unregister_tx(tx, success=was_sent)
+        except BaseException:
+            # Same GeneratorExit-safe pattern as the legacy send_frame() -
+            # see its own comment (Step 5.I).
+            self.channel.unregister_tx(tx, success=was_sent)
+            raise
+
+        if was_sent:
+            self.channel.airtime_control[self.name] += self.times.get_ack_frame_time()
+            yield self.env.timeout(self.times.get_ack_frame_time())
+            if frame.ack_packet is not None:
+                frame.ack_packet.status = "DELIVERED"
+                frame.ack_packet.delivered_at = self.env.now
+            return True
+        else:
+            yield self.env.timeout(self.times.ack_timeout)
+            return False
+
+    def sent_failed_edca(self, ac: str):
+        """Same structure as the legacy sent_failed(), keyed by AC. A
+        REAL failed attempt (SINR too low / lost an over-the-air
+        collision) - unlike a virtual-collision loss (see
+        wait_back_off_edca()), this DOES increment the packet's own
+        retry_count, matching real semantics: an actual frame really
+        was put on the air this time."""
+        frame = self.ac_frame_to_send[ac]
+        log(self, f"There was a collision (EDCA {ac})")
+        frame.number_of_retransmissions += 1
+        self.channel.failed_transmissions += 1
+        self.failed_transmissions += 1
+        self.ac_failed_in_row[ac] += 1
+        if frame.packet is not None:
+            frame.packet.retry_count = frame.number_of_retransmissions
+        if frame.number_of_retransmissions > self.config.r_limit:
+            if frame.packet is not None:
+                frame.packet.status = "DROPPED"
+                self.packet_log.append(frame.packet)
+            self._refresh_ac_frame(ac)
+            self.ac_failed_in_row[ac] = 0
+
+    def sent_completed_edca(self, ac: str):
+        """Same structure as the legacy sent_completed(), keyed by AC."""
+        frame = self.ac_frame_to_send[ac]
+        log(self, f"Successfully sent frame, waiting ack: {self.times.get_ack_frame_time()} (EDCA {ac})")
+        frame.t_end = self.env.now
+        frame.t_to_send = (frame.t_end - frame.t_start)
+        self.channel.succeeded_transmissions += 1
+        self.succeeded_transmissions += 1
+        self.ac_failed_in_row[ac] = 0
+        self.channel.bytes_sent += frame.data_size
+        if frame.packet is not None:
+            frame.packet.status = "DELIVERED"
+            frame.packet.delivered_at = self.env.now
+            self.packet_log.append(frame.packet)
+        # Reuse the exact same ACK-construction method the legacy path
+        # uses (_make_ack_packet(), Step 8.F) rather than duplicating its
+        # field logic here - one source of truth for ACK shape/traffic-
+        # class inheritance across both paths.
+        frame.ack_packet = self._make_ack_packet(frame.packet)
+        # Fresh packet+frame is picked up for this AC once this delivery
+        # is fully done (send_frame_edca() has already returned True by
+        # the time the caller loops back) - see start_edca().
+
+    def start_edca(self):
+        """
+        Top-level EDCA driving loop - see class docstring for full
+        scope. Saturated-only: every AC always has a pending frame, so
+        this never blocks waiting for "something to send" the way the
+        poisson/cbr legacy path can.
+        """
+        for ac in QOS_TRAFFIC_CLASSES:
+            self._refresh_ac_frame(ac)
+        while True:
+            winner = yield from self.wait_back_off_edca()
+            was_sent = yield self.env.process(self.send_frame_edca(winner))
+            # A fresh packet+frame is needed for `winner` whenever its
+            # CURRENT one reached a terminal state this attempt -
+            # DELIVERED (was_sent) or DROPPED (retry limit just
+            # exceeded, handled inside sent_failed_edca() via
+            # _refresh_ac_frame()). A real failure that's still under
+            # the retry limit keeps the SAME frame/packet for its next
+            # attempt (retry_count already bumped) - exactly like the
+            # legacy path's retry semantics.
+            if was_sent:
+                self._refresh_ac_frame(winner)
+    # Rashed-Step 10.B-08-07-2026-end
 
     def start(self):
         # Rashed-Step 3.F-12-26-2025-start

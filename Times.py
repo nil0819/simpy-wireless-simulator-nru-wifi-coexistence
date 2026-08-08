@@ -45,6 +45,20 @@ class Times:
     # Rashed-Step 6.A-07-31-2026-end
     ack_timeout = 45  # [us]
 
+    # Rashed-Step 10.B-08-07-2026-start
+    @staticmethod
+    def get_aifs_us(aifsn: int) -> float:
+        """
+        AIFS (Arbitration Inter-Frame Space) for a given AIFSN, per
+        802.11e: AIFS = AIFSN * aSlotTime + aSIFSTime. Generalizes
+        t_difs (DCF's single fixed DIFS = 2*t_slot+t_sifs) to EDCA's
+        per-Access-Category value - get_aifs_us(2) == t_difs exactly,
+        by construction (AC_VO/AC_VI's real-spec AIFSN is 2 - see
+        common.packet.DEFAULT_EDCA_PARAMS).
+        """
+        return aifsn * Times.t_slot + Times.t_sifs
+    # Rashed-Step 10.B-08-07-2026-end
+
     # Mac overhead
     mac_overhead = 40 * 8  # [b]
 

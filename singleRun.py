@@ -155,6 +155,9 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--wifi-traffic-class-mix", "wifi_traffic_class_mix", type=str, multiple=True, help="Wi-Fi QoS traffic-class mix, repeatable 'class_label=weight' (e.g. --wifi-traffic-class-mix voice=0.1 --wifi-traffic-class-mix video=0.2 --wifi-traffic-class-mix best_effort=0.5 --wifi-traffic-class-mix background=0.2). Default (unset) = every packet stays 'best_effort' with NO random draw at all - byte-identical to every pre-Step-10.A run. When set, each new packet draws its class via a weighted random choice. Labels are conventionally from common.packet.QOS_TRAFFIC_CLASSES (voice/video/best_effort/background, WMM-AC-flavored) but not enforced. This only tags packets for now - actual differentiated channel access (EDCA-style priority) is a later step, not yet implemented.")
 @click.option("--nru-traffic-class-mix", "nru_traffic_class_mix", type=str, multiple=True, help="NR-U QoS traffic-class mix. See --wifi-traffic-class-mix.")
 # Rashed-Step 10.A-08-07-2026-end
+# Rashed-Step 10.B-08-07-2026-start
+@click.option("--wifi-edca", "wifi_edca", is_flag=True, default=False, help="Enable real 802.11e EDCA differentiated channel access for Wi-Fi (per-AC voice/video/best_effort/background contention with independent CWmin/CWmax/AIFSN and virtual-collision resolution - see Project details/Step 10.txt's 10.B section). Wi-Fi only (NR-U is unaffected - no standardized EDCA-equivalent exists for unlicensed LBT). Default (unset/False) = legacy single-queue DCF contention, byte-identical to every pre-Step-10.B run. Currently requires --wifi-traffic-model=saturated (the default) - EDCA + poisson/cbr queueing is a deferred follow-up.")
+# Rashed-Step 10.B-08-07-2026-end
 
 def single_run(
         runs: int,
@@ -232,6 +235,9 @@ def single_run(
         wifi_traffic_class_mix=(),
         nru_traffic_class_mix=(),
         # Rashed-Step 10.A-08-07-2026-end
+        # Rashed-Step 10.B-08-07-2026-start
+        wifi_edca: bool = False,
+        # Rashed-Step 10.B-08-07-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -255,6 +261,20 @@ def single_run(
     wifi_class_mix = parse_traffic_class_mix(wifi_traffic_class_mix, "--wifi-traffic-class-mix") or None
     nru_class_mix = parse_traffic_class_mix(nru_traffic_class_mix, "--nru-traffic-class-mix") or None
     # Rashed-Step 10.A-08-07-2026-end
+
+    # Rashed-Step 10.B-08-07-2026-start
+    # Fail fast with a clear CLI-level message rather than letting the
+    # user hit wifi.WiFi.__init__'s deeper ValueError - same information,
+    # surfaced earlier. That ValueError guard stays in place too (defense
+    # in depth for anyone constructing WiFi directly, not just via this
+    # CLI).
+    if wifi_edca and wifi_traffic_model != "saturated":
+        raise click.BadParameter(
+            "--wifi-edca currently only supports --wifi-traffic-model=saturated "
+            "(EDCA + poisson/cbr queueing is a deferred follow-up - see "
+            "Project details/Step 10.txt's 10.B NOT DONE list)."
+        )
+    # Rashed-Step 10.B-08-07-2026-end
 
     # Rashed-Step 8.B-08-06-2026-start
     # Rashed-Step 8.C-08-06-2026: added packet_size_bytes=... (defaults
@@ -288,8 +308,11 @@ def single_run(
                               f_ghz=wifi_freq_ghz * 1e9,
                               # Rashed-Step 5.E-02-06-2026-end
                               # Rashed-Step 5.F-02-06-2026-start
-                              tx_power_dbm=wifi_tx_power_dbm
+                              tx_power_dbm=wifi_tx_power_dbm,
                               # Rashed-Step 5.F-02-06-2026-end
+                              # Rashed-Step 10.B-08-07-2026-start
+                              qos_enabled=wifi_edca,
+                              # Rashed-Step 10.B-08-07-2026-end
                               ),
                        Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync, min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot,
                                  # Rashed-Step 8.D-08-06-2026-start

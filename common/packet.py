@@ -35,7 +35,7 @@ WHAT THIS FILE DELIBERATELY DOES NOT DO YET
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional
 import random
 import statistics
 
@@ -95,6 +95,45 @@ def pick_traffic_class(traffic_class_mix: "dict[str, float]") -> str:
     weights = list(traffic_class_mix.values())
     return random.choices(classes, weights=weights)[0]
 # Rashed-Step 10.A-08-07-2026-end
+
+
+# Rashed-Step 10.B-08-07-2026-start
+@dataclass
+class EdcaAcParams:
+    """
+    Per-Access-Category EDCA channel-access parameters (802.11e). cw_min/
+    cw_max are contention-window bounds in SLOTS (same units as
+    wifi.Config.cw_min/cw_max already use for the non-EDCA path); aifsn
+    is the Arbitration Inter-Frame Space Number - the AIFS itself
+    (analogous to DCF's fixed DIFS) is aifsn * Times.t_slot + Times.
+    t_sifs, computed by Times.get_aifs_us(). TXOP bursting (multiple
+    frames per won contention) is NOT modeled - see wifi.WiFi's EDCA
+    docstring for the full scope note.
+    """
+    cw_min: int
+    cw_max: int
+    aifsn: int
+
+
+# Standard default EDCA parameter set (802.11-2020 Table 9-155 / the
+# same values widely published as the Wi-Fi Alliance WMM default set),
+# for the legacy-OFDM/non-HT PHY this simulator's Times.py already
+# models (aCWmin=15, aCWmax=1023, aSlotTime=9us, aSIFSTime=16us - see
+# Times.py). AC_VO/AC_VI's aifsn=2 giving AIFS=34us is a deliberate,
+# checkable consistency point: that's EXACTLY Times.t_difs (fixed at
+# 34us since Step 6.A's DIFS bugfix) - i.e. non-EDCA DCF's single DIFS
+# IS, by construction, what AC_VO/AC_VI's AIFS already equals. Keyed by
+# the same QOS_TRAFFIC_CLASSES labels (voice=AC_VO, video=AC_VI,
+# best_effort=AC_BE, background=AC_BK) rather than raw "AC_VO"-style
+# strings, so this table plugs directly into Packet.traffic_class /
+# TrafficConfig.traffic_class_mix without a separate label mapping.
+DEFAULT_EDCA_PARAMS: Dict[str, EdcaAcParams] = {
+    "voice": EdcaAcParams(cw_min=3, cw_max=7, aifsn=2),
+    "video": EdcaAcParams(cw_min=7, cw_max=15, aifsn=2),
+    "best_effort": EdcaAcParams(cw_min=15, cw_max=1023, aifsn=3),
+    "background": EdcaAcParams(cw_min=15, cw_max=1023, aifsn=7),
+}
+# Rashed-Step 10.B-08-07-2026-end
 
 
 @dataclass
