@@ -366,6 +366,100 @@ def compute_packet_stats_by_node(node_packet_logs: "dict[str, list[Packet]]") ->
 # Rashed-Step 9.A-08-07-2026-end
 
 
+# Rashed-Step 10.C-08-11-2026-start
+# Representative one-way latency budgets per traffic class (Packet.
+# traffic_class - see QOS_TRAFFIC_CLASSES above), used only to compute
+# an SLA-style "% of DELIVERED packets under budget" metric in
+# compute_packet_stats_by_class() below. Real, citable numbers, not
+# invented for this simulator:
+#   voice: 150000us (150ms) - ITU-T G.114's well-known one-way delay
+#     recommendation for acceptable conversational voice quality (the
+#     same "voice needs to be fast" reasoning behind WMM/802.11e's
+#     AC_VO getting the shortest CW/AIFSN, which QOS_TRAFFIC_CLASSES'
+#     "voice" label already borrows from - see Step 10.A/10.B).
+#   video: 400000us (400ms) - a commonly cited looser bound for
+#     interactive/conversational video (ITU-T G.1010 places
+#     "conversational video" in a category that tolerates more delay
+#     than voice but still wants well under a second end-to-end).
+#   best_effort/background: None - no standardized SLA exists for
+#     these classes by design (that's WHY they're lower priority in
+#     EDCA), so compute_packet_stats_by_class() skips the SLA
+#     calculation for them entirely. None here means "not applicable",
+#     NOT "0us budget, always violated".
+QOS_LATENCY_BUDGET_US = {
+    "voice": 150_000,
+    "video": 400_000,
+    "best_effort": None,
+    "background": None,
+}
+
+
+def compute_packet_stats_by_class(packets: "list[Packet]", latency_budget_us: "Optional[Dict[str, Optional[float]]]" = None) -> dict:
+    """
+    Per-traffic-class breakdown of compute_packet_stats() (Step 9.A),
+    keyed by Packet.traffic_class (Step 10.A) - {"voice": {...},
+    "video": {...}, ...} - plus 3 extra SLA-style keys per class on top
+    of compute_packet_stats()'s existing ones:
+      sla_budget_us       - the latency budget used for this class (see
+                             QOS_LATENCY_BUDGET_US), or None if this
+                             class has no standardized budget.
+      sla_compliance_rate - fraction of DELIVERED packets in this class
+                             whose latency (delivered_at - created_at)
+                             was <= sla_budget_us. None if sla_budget_us
+                             is None (not applicable), or if there are
+                             zero DELIVERED packets in this class (no
+                             data to compute a rate from - NOT the same
+                             as 0.0, which would mean "100% violated").
+      sla_violation_rate  - 1.0 - sla_compliance_rate. Same None cases.
+
+    Only traffic classes actually PRESENT in `packets` become keys - an
+    empty input list returns an empty dict, not one key per
+    QOS_TRAFFIC_CLASSES member zero-filled - matching
+    compute_packet_stats_by_node()'s "only report what's actually
+    there" convention. A packet with a traffic_class that isn't in
+    QOS_TRAFFIC_CLASSES (e.g. a typo'd --wifi-traffic-class-mix label -
+    see 10.A's deliberate leniency) still becomes its own key here,
+    just with sla_budget_us=None (an unrecognized label is never in
+    QOS_LATENCY_BUDGET_US, so it falls through to the same "no SLA"
+    treatment as best_effort/background).
+
+    latency_budget_us: optional override for QOS_LATENCY_BUDGET_US
+    (e.g. a caller wanting a stricter voice budget for a specific
+    scenario) - defaults to the module-level table when omitted/None.
+    """
+    budgets = latency_budget_us if latency_budget_us is not None else QOS_LATENCY_BUDGET_US
+    classes_present = sorted(set(p.traffic_class for p in packets))
+
+    result = {}
+    for cls in classes_present:
+        class_packets = [p for p in packets if p.traffic_class == cls]
+        stats = compute_packet_stats(class_packets)
+
+        budget = budgets.get(cls)
+        if budget is None:
+            stats["sla_budget_us"] = None
+            stats["sla_compliance_rate"] = None
+            stats["sla_violation_rate"] = None
+        else:
+            delivered_latencies = [
+                p.delivered_at - p.created_at for p in class_packets
+                if p.status == "DELIVERED" and p.delivered_at is not None
+            ]
+            stats["sla_budget_us"] = budget
+            if delivered_latencies:
+                within_budget = sum(1 for lat in delivered_latencies if lat <= budget)
+                compliance = within_budget / len(delivered_latencies)
+                stats["sla_compliance_rate"] = compliance
+                stats["sla_violation_rate"] = 1.0 - compliance
+            else:
+                stats["sla_compliance_rate"] = None
+                stats["sla_violation_rate"] = None
+
+        result[cls] = stats
+    return result
+# Rashed-Step 10.C-08-11-2026-end
+
+
 # Rashed-Step 9.D-08-07-2026-start
 # Packet-level CSV export - optional (opt-in via singleRun.py's
 # --export-packets-csv, unset by default), for offline analysis at

@@ -26,6 +26,9 @@ from common.packet import (
     # Rashed-Step 10.B-08-07-2026-start
     EdcaAcParams, DEFAULT_EDCA_PARAMS,
     # Rashed-Step 10.B-08-07-2026-end
+    # Rashed-Step 10.C-08-11-2026-start
+    compute_packet_stats_by_class, QOS_LATENCY_BUDGET_US,
+    # Rashed-Step 10.C-08-11-2026-end
 )
 from common.common import Frame
 from channel.channel import ActiveTx, Channel
@@ -362,20 +365,26 @@ compute_packet_stats_by_node().
 """
 
 
-def _make_delivered(packet_id, created_at, latency):
+def _make_delivered(packet_id, created_at, latency, traffic_class="best_effort"):
     return Packet(
         packet_id=packet_id, source="a", destination="b",
         payload_bytes=100, header_bytes=40,
         created_at=created_at, status="DELIVERED",
         delivered_at=created_at + latency,
+        # Rashed-Step 10.C-08-11-2026-start
+        traffic_class=traffic_class,
+        # Rashed-Step 10.C-08-11-2026-end
     )
 
 
-def _make_dropped(packet_id, created_at):
+def _make_dropped(packet_id, created_at, traffic_class="best_effort"):
     return Packet(
         packet_id=packet_id, source="a", destination="b",
         payload_bytes=100, header_bytes=40,
         created_at=created_at, status="DROPPED",
+        # Rashed-Step 10.C-08-11-2026-start
+        traffic_class=traffic_class,
+        # Rashed-Step 10.C-08-11-2026-end
     )
 
 
@@ -880,6 +889,95 @@ def test_legacy_wifi_untouched_when_qos_disabled():
 # Rashed-Step 10.B-08-07-2026-end
 
 
+# Rashed-Step 10.C-08-11-2026-start
+"""
+Step 10.C unit tests: compute_packet_stats_by_class() - the per-
+traffic-class breakdown of compute_packet_stats() plus its SLA-style
+sla_budget_us/sla_compliance_rate/sla_violation_rate keys.
+"""
+
+
+def test_compute_packet_stats_by_class_hand_verified_dataset():
+    packets = [
+        # voice: 2 delivered, one under the 150000us budget, one over.
+        _make_delivered("v1", 0, 100_000, traffic_class="voice"),
+        _make_delivered("v2", 0, 200_000, traffic_class="voice"),
+        # background: 1 delivered, 1 dropped - no SLA budget applies.
+        _make_delivered("b1", 0, 500_000, traffic_class="background"),
+        _make_dropped("b2", 0, traffic_class="background"),
+    ]
+    by_class = compute_packet_stats_by_class(packets)
+
+    assert set(by_class.keys()) == {"voice", "background"}
+
+    voice = by_class["voice"]
+    assert voice["total"] == 2
+    assert voice["delivered"] == 2
+    assert voice["avg_latency_us"] == 150_000.0  # (100000+200000)/2
+    assert voice["sla_budget_us"] == 150_000
+    assert voice["sla_compliance_rate"] == 0.5   # only the 100000us one is <= budget
+    assert voice["sla_violation_rate"] == 0.5
+
+    background = by_class["background"]
+    assert background["total"] == 2
+    assert background["delivered"] == 1
+    assert background["dropped"] == 1
+    assert background["loss_rate"] == 0.5
+    assert background["sla_budget_us"] is None
+    assert background["sla_compliance_rate"] is None
+    assert background["sla_violation_rate"] is None
+
+
+def test_compute_packet_stats_by_class_only_reports_classes_present():
+    packets = [_make_delivered("v1", 0, 1000, traffic_class="voice")]
+    by_class = compute_packet_stats_by_class(packets)
+    assert set(by_class.keys()) == {"voice"}  # NOT one key per QOS_TRAFFIC_CLASSES
+
+
+def test_compute_packet_stats_by_class_empty_list_returns_empty_dict():
+    assert compute_packet_stats_by_class([]) == {}
+
+
+def test_compute_packet_stats_by_class_all_dropped_gives_none_compliance_not_zero():
+    # A class whose only packets all DROPPED has a budget but zero
+    # DELIVERED packets to compute a compliance rate FROM - must be
+    # None ("no data"), not 0.0 ("100% violated", which would be a
+    # misleading conflation of "no data" with "total failure").
+    packets = [_make_dropped("v1", 0, traffic_class="voice")]
+    by_class = compute_packet_stats_by_class(packets)
+    assert by_class["voice"]["sla_budget_us"] == 150_000
+    assert by_class["voice"]["sla_compliance_rate"] is None
+    assert by_class["voice"]["sla_violation_rate"] is None
+
+
+def test_compute_packet_stats_by_class_unrecognized_label_gets_no_sla():
+    # A typo'd/custom traffic_class (not in QOS_TRAFFIC_CLASSES) still
+    # becomes its own key (10.A's deliberate leniency), just with no
+    # SLA budget - QOS_LATENCY_BUDGET_US.get() falls through to None
+    # for anything it doesn't recognize.
+    packets = [_make_delivered("x1", 0, 1000, traffic_class="some_typo")]
+    by_class = compute_packet_stats_by_class(packets)
+    assert by_class["some_typo"]["sla_budget_us"] is None
+    assert by_class["some_typo"]["sla_compliance_rate"] is None
+
+
+def test_compute_packet_stats_by_class_respects_custom_budget_override():
+    packets = [_make_delivered("v1", 0, 500_000, traffic_class="voice")]
+    # Default 150000us budget would mark this a violation; a looser
+    # custom override should mark it compliant instead.
+    by_class = compute_packet_stats_by_class(packets, latency_budget_us={"voice": 1_000_000})
+    assert by_class["voice"]["sla_budget_us"] == 1_000_000
+    assert by_class["voice"]["sla_compliance_rate"] == 1.0
+
+
+def test_qos_latency_budget_us_has_expected_values():
+    assert QOS_LATENCY_BUDGET_US["voice"] == 150_000
+    assert QOS_LATENCY_BUDGET_US["video"] == 400_000
+    assert QOS_LATENCY_BUDGET_US["best_effort"] is None
+    assert QOS_LATENCY_BUDGET_US["background"] is None
+# Rashed-Step 10.C-08-11-2026-end
+
+
 # Rashed-Step 8.A-08-06-2026-start
 if __name__ == "__main__":
     tests = [
@@ -937,6 +1035,15 @@ if __name__ == "__main__":
         test_edca_saturated_run_favors_voice_over_background_under_contention,
         test_legacy_wifi_untouched_when_qos_disabled,
         # Rashed-Step 10.B-08-07-2026-end
+        # Rashed-Step 10.C-08-11-2026-start
+        test_compute_packet_stats_by_class_hand_verified_dataset,
+        test_compute_packet_stats_by_class_only_reports_classes_present,
+        test_compute_packet_stats_by_class_empty_list_returns_empty_dict,
+        test_compute_packet_stats_by_class_all_dropped_gives_none_compliance_not_zero,
+        test_compute_packet_stats_by_class_unrecognized_label_gets_no_sla,
+        test_compute_packet_stats_by_class_respects_custom_budget_override,
+        test_qos_latency_budget_us_has_expected_values,
+        # Rashed-Step 10.C-08-11-2026-end
     ]
     passed = 0
     failed = 0

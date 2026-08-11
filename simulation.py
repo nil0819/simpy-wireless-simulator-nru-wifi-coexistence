@@ -24,6 +24,9 @@ from common.packet import compute_packet_stats
 # Rashed-Step 9.A-08-07-2026-start
 from common.packet import compute_packet_stats_by_node
 # Rashed-Step 9.A-08-07-2026-end
+# Rashed-Step 10.C-08-11-2026-start
+from common.packet import compute_packet_stats_by_class
+# Rashed-Step 10.C-08-11-2026-end
 # Rashed-Step 9.D-08-07-2026-start
 from common.packet import export_packets_csv
 # Rashed-Step 9.D-08-07-2026-end
@@ -430,6 +433,23 @@ def run_simulation(
     print("packet stats WiFi by node:", compute_packet_stats_by_node(wifi_node_logs))
     print("packet stats NRU by node:", compute_packet_stats_by_node(nru_node_logs))
     # Rashed-Step 9.A-08-07-2026-end
+
+    # Rashed-Step 10.C-08-11-2026-start
+    # Per-traffic-class breakdown of the same aggregated stats (Step
+    # 10.A gave every Packet a traffic_class; this is the first thing
+    # in simulation.py that actually reports on it). Uses the SAME
+    # aggregated wifi_packets/nru_packets lists already built above for
+    # the plain compute_packet_stats() call - no new packet collection
+    # needed. Reports per class regardless of whether --wifi-traffic-
+    # class-mix/--wifi-edca were set - if every packet is still
+    # "best_effort" (the default), this just prints one class with the
+    # same numbers as the aggregate line above, which is the correct,
+    # regression-safe "no-op-looking" behavior for a run with no new
+    # flags (a real key gets ADDED to the printed output, but nothing
+    # about the existing lines/values changes).
+    print("packet stats WiFi by class:", compute_packet_stats_by_class(wifi_packets))
+    print("packet stats NRU by class:", compute_packet_stats_by_class(nru_packets))
+    # Rashed-Step 10.C-08-11-2026-end
 
     # Rashed-Step 9.D-08-07-2026-start
     # Opt-in packet-level CSV export - only touches the filesystem when
