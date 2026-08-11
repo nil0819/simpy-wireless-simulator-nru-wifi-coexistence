@@ -29,6 +29,9 @@ from common.packet import (
     # Rashed-Step 10.C-08-11-2026-start
     compute_packet_stats_by_class, QOS_LATENCY_BUDGET_US,
     # Rashed-Step 10.C-08-11-2026-end
+    # Rashed-Step 10.D-08-11-2026-start
+    compute_qoe_by_class,
+    # Rashed-Step 10.D-08-11-2026-end
 )
 from common.common import Frame
 from channel.channel import ActiveTx, Channel
@@ -978,6 +981,80 @@ def test_qos_latency_budget_us_has_expected_values():
 # Rashed-Step 10.C-08-11-2026-end
 
 
+# Rashed-Step 10.D-08-11-2026-start
+"""
+Step 10.D unit tests: compute_qoe_by_class() - voice's real simplified
+E-model MOS, video's clearly-labeled heuristic proxy, and best_effort/
+background's correct "no QoE concept" None.
+"""
+
+
+def test_voice_qoe_zero_delay_zero_loss_matches_known_e_model_reference():
+    # Well-known E-model reference point: R=93.2 (R0=93.2, Id=Ie_eff=0)
+    # at zero delay and zero loss -> MOS ~4.41, the G.711 "no
+    # impairment" ceiling (not 5.0 - matches Cole & Rosenbluth's own
+    # worked example).
+    by_class = compute_packet_stats_by_class([_make_delivered("v1", 0, 0, traffic_class="voice")])
+    qoe = compute_qoe_by_class(by_class)
+    assert abs(qoe["voice"]["qoe_r_factor"] - 93.2) < 1e-6
+    assert abs(qoe["voice"]["qoe_score"] - 4.409285824) < 1e-6
+
+
+def test_voice_qoe_degrades_with_higher_delay_and_loss():
+    low = compute_qoe_by_class(compute_packet_stats_by_class(
+        [_make_delivered("v1", 0, 50_000, traffic_class="voice")]
+    ))
+    high = compute_qoe_by_class(compute_packet_stats_by_class([
+        _make_delivered("v1", 0, 300_000, traffic_class="voice"),
+        _make_dropped("v2", 0, traffic_class="voice"),
+    ]))
+    assert low["voice"]["qoe_score"] > high["voice"]["qoe_score"]
+    assert high["voice"]["qoe_score"] >= 1.0  # never below the formula's own floor
+
+
+def test_voice_qoe_none_when_no_delivered_packets():
+    by_class = compute_packet_stats_by_class([_make_dropped("v1", 0, traffic_class="voice")])
+    qoe = compute_qoe_by_class(by_class)
+    assert qoe["voice"]["qoe_score"] is None
+    assert qoe["voice"]["qoe_r_factor"] is None
+
+
+def test_video_qoe_proxy_full_score_under_budget_no_loss():
+    by_class = compute_packet_stats_by_class([_make_delivered("vd1", 0, 100_000, traffic_class="video")])
+    qoe = compute_qoe_by_class(by_class)
+    assert qoe["video"]["qoe_score"] == 5.0
+    assert "NOT a standardized metric" in qoe["video"]["qoe_model"]
+
+
+def test_video_qoe_proxy_penalizes_over_budget_latency_and_loss():
+    by_class = compute_packet_stats_by_class([
+        _make_delivered("vd1", 0, 900_000, traffic_class="video"),  # >2x the 400000us budget
+        _make_dropped("vd2", 0, traffic_class="video"),
+    ])
+    qoe = compute_qoe_by_class(by_class)
+    assert qoe["video"]["qoe_score"] == 1.0  # both penalties maxed out, clamped at the floor
+
+
+def test_qoe_by_class_none_for_best_effort_and_background():
+    by_class = compute_packet_stats_by_class([
+        _make_delivered("b1", 0, 1000, traffic_class="best_effort"),
+        _make_delivered("k1", 0, 1000, traffic_class="background"),
+    ])
+    qoe = compute_qoe_by_class(by_class)
+    assert qoe["best_effort"]["qoe_score"] is None
+    assert qoe["best_effort"]["qoe_model"] is None
+    assert qoe["background"]["qoe_score"] is None
+    assert qoe["background"]["qoe_model"] is None
+
+
+def test_compute_qoe_by_class_does_not_mutate_input_dict():
+    by_class = compute_packet_stats_by_class([_make_delivered("v1", 0, 50_000, traffic_class="voice")])
+    original_keys = set(by_class["voice"].keys())
+    compute_qoe_by_class(by_class)
+    assert set(by_class["voice"].keys()) == original_keys  # unchanged - no qoe_score leaked in
+# Rashed-Step 10.D-08-11-2026-end
+
+
 # Rashed-Step 8.A-08-06-2026-start
 if __name__ == "__main__":
     tests = [
@@ -1044,6 +1121,15 @@ if __name__ == "__main__":
         test_compute_packet_stats_by_class_respects_custom_budget_override,
         test_qos_latency_budget_us_has_expected_values,
         # Rashed-Step 10.C-08-11-2026-end
+        # Rashed-Step 10.D-08-11-2026-start
+        test_voice_qoe_zero_delay_zero_loss_matches_known_e_model_reference,
+        test_voice_qoe_degrades_with_higher_delay_and_loss,
+        test_voice_qoe_none_when_no_delivered_packets,
+        test_video_qoe_proxy_full_score_under_budget_no_loss,
+        test_video_qoe_proxy_penalizes_over_budget_latency_and_loss,
+        test_qoe_by_class_none_for_best_effort_and_background,
+        test_compute_qoe_by_class_does_not_mutate_input_dict,
+        # Rashed-Step 10.D-08-11-2026-end
     ]
     passed = 0
     failed = 0

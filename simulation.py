@@ -27,6 +27,9 @@ from common.packet import compute_packet_stats_by_node
 # Rashed-Step 10.C-08-11-2026-start
 from common.packet import compute_packet_stats_by_class
 # Rashed-Step 10.C-08-11-2026-end
+# Rashed-Step 10.D-08-11-2026-start
+from common.packet import compute_qoe_by_class
+# Rashed-Step 10.D-08-11-2026-end
 # Rashed-Step 9.D-08-07-2026-start
 from common.packet import export_packets_csv
 # Rashed-Step 9.D-08-07-2026-end
@@ -447,9 +450,26 @@ def run_simulation(
     # regression-safe "no-op-looking" behavior for a run with no new
     # flags (a real key gets ADDED to the printed output, but nothing
     # about the existing lines/values changes).
-    print("packet stats WiFi by class:", compute_packet_stats_by_class(wifi_packets))
-    print("packet stats NRU by class:", compute_packet_stats_by_class(nru_packets))
+    wifi_stats_by_class = compute_packet_stats_by_class(wifi_packets)
+    nru_stats_by_class = compute_packet_stats_by_class(nru_packets)
+    print("packet stats WiFi by class:", wifi_stats_by_class)
+    print("packet stats NRU by class:", nru_stats_by_class)
     # Rashed-Step 10.C-08-11-2026-end
+
+    # Rashed-Step 10.D-08-11-2026-start
+    # QoE scoring layer, built directly on top of the per-class stats
+    # just computed above (compute_qoe_by_class() takes that dict as
+    # its input, not raw packets - see its docstring). voice gets a
+    # real MOS via a simplified ITU-T G.107 E-model; video gets a
+    # clearly-labeled simulator-local heuristic proxy score (NOT
+    # comparable to voice's MOS scale); best_effort/background get
+    # qoe_score=None (QoE isn't a meaningful concept for non-
+    # interactive data traffic). Same regression-safe shape as 10.C:
+    # unconditional, additive-only - a default run just adds one
+    # "best_effort" class with qoe_score=None, no existing line changes.
+    print("packet QoE WiFi by class:", compute_qoe_by_class(wifi_stats_by_class))
+    print("packet QoE NRU by class:", compute_qoe_by_class(nru_stats_by_class))
+    # Rashed-Step 10.D-08-11-2026-end
 
     # Rashed-Step 9.D-08-07-2026-start
     # Opt-in packet-level CSV export - only touches the filesystem when

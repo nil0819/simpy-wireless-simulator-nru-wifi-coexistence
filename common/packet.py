@@ -460,6 +460,165 @@ def compute_packet_stats_by_class(packets: "list[Packet]", latency_budget_us: "O
 # Rashed-Step 10.C-08-11-2026-end
 
 
+# Rashed-Step 10.D-08-11-2026-start
+def _voice_e_model_mos(avg_latency_us, loss_rate):
+    """
+    Real, citable QoE model for voice: a simplified form of the ITU-T
+    G.107 E-model, specifically the closed-form delay/loss impairment
+    formulas from Cole & Rosenbluth, "Voice over IP Performance
+    Monitoring", ACM SIGCOMM Computer Communication Review, 2001 - a
+    widely used simplification of the full E-model for VoIP QoE
+    estimation that needs only mean one-way delay and packet loss rate
+    (both of which this simulator already tracks via
+    compute_packet_stats()), not the full E-model's much larger
+    parameter set (room noise, echo, talker levels, etc. - not modeled
+    by this simulator's PHY/MAC layers at all).
+
+    Id (delay impairment), Cole & Rosenbluth eq. for one-way delay d
+    (ms), no echo term (this simulator has no echo path concept):
+        Id = 0.024*d + 0.11*(d - 177.3) * H(d - 177.3)
+    where H is the Heaviside step (0 for d <= 177.3, 1 otherwise) -
+    delay under ~177ms has a small linear cost; beyond that, a much
+    steeper additional penalty kicks in (this is the same "impairment
+    accelerates past ~150-180ms" shape behind ITU-T G.114's 150ms
+    voice budget already used in Step 10.C's QOS_LATENCY_BUDGET_US).
+
+    Ie-eff (equipment impairment, codec + packet loss), same source,
+    assuming G.711 (Ie=0 base codec impairment, Bpl=25.1 packet-loss
+    robustness factor - G.711's own published constants, not tuned for
+    this simulator):
+        Ie_eff = Ie + (95 - Ie) * (Ppl / (Ppl + Bpl))
+    where Ppl is packet loss AS A PERCENTAGE (0-100, not a 0-1 fraction).
+
+    R = 93.2 - Id - Ie_eff (R0=93.2, Is=0, A=0 - the "best case" basic
+    signal-to-noise term and no user-advantage bonus, matching the
+    common simplified-E-model convention when only transport-layer
+    delay/loss are being modeled, same as Cole & Rosenbluth's own
+    worked examples).
+
+    R-to-MOS conversion is the standard ITU-T G.107 formula:
+        MOS = 1                                   if R < 0
+        MOS = 4.5                                 if R > 100
+        MOS = 1 + 0.035*R + R*(R-60)*(100-R)*7e-6  otherwise
+    Verified against well-known reference points before use: R=93.2
+    (zero delay, zero loss) -> MOS=4.409 (the commonly cited "G.711,
+    no impairment" ceiling of ~4.4, not 5.0 - even a perfect network
+    can't make G.711 sound like an in-person conversation); R=100 ->
+    MOS=4.5 exactly (the formula's own ceiling).
+
+    Returns (R, mos) - both None if avg_latency_us is None (no
+    DELIVERED packets to measure delay from at all - "no data", not
+    "worst possible quality").
+    """
+    if avg_latency_us is None:
+        return None, None
+
+    d_ms = avg_latency_us / 1000.0
+    Id = 0.024 * d_ms + 0.11 * (d_ms - 177.3) * (1.0 if d_ms > 177.3 else 0.0)
+
+    Ie = 0.0    # G.711, no codec-inherent impairment
+    Bpl = 25.1  # G.711 packet-loss robustness factor
+    Ppl = (loss_rate or 0.0) * 100.0  # fraction -> percent
+    Ie_eff = Ie + (95.0 - Ie) * (Ppl / (Ppl + Bpl))
+
+    R = 93.2 - Id - Ie_eff
+
+    if R < 0:
+        mos = 1.0
+    elif R > 100:
+        mos = 4.5
+    else:
+        mos = 1 + 0.035 * R + R * (R - 60) * (100 - R) * 7e-6
+    return R, mos
+
+
+def _video_qoe_proxy_score(avg_latency_us, loss_rate, budget_us):
+    """
+    NOT a standardized metric - there is no video equivalent of the
+    E-model with the same universal acceptance (real video QoE models
+    like ITU-T P.1203 need bitstream/codec/resolution/rebuffering
+    details this simulator's MAC/PHY-only scope has no concept of).
+    This is a clearly-labeled, simulator-local heuristic: a 1 (worst)
+    to 5 (best) score that penalizes loss and over-budget latency
+    linearly, capped, purely to give video traffic SOME illustrative
+    per-class quality signal alongside voice's real MOS - callers must
+    not treat this as directly comparable to a real MOS score from
+    voice or from any published video QoE study.
+
+    score = 5.0
+            - up to 2.0 points for loss_rate, scaling linearly to the
+              full 2.0-point penalty at 5% loss or worse (an arbitrary
+              but documented threshold - real video codecs' actual
+              loss tolerance varies hugely by codec/GOP structure,
+              which this simulator does not model)
+            - up to 2.0 points for latency exceeding budget_us, scaling
+              linearly from 0 penalty at exactly the budget to the full
+              2.0-point penalty at 2x budget or worse
+    Clamped to [1.0, 5.0]. Returns None if avg_latency_us is None (no
+    DELIVERED packets) or budget_us is None (no budget to measure
+    "over budget" against, e.g. a class other than video using this
+    function with a custom budget table).
+    """
+    if avg_latency_us is None or budget_us is None:
+        return None
+
+    loss_penalty = min(1.0, (loss_rate or 0.0) / 0.05) * 2.0
+
+    latency_ratio_over = max(0.0, (avg_latency_us / budget_us) - 1.0)
+    latency_penalty = min(1.0, latency_ratio_over) * 2.0
+
+    score = 5.0 - loss_penalty - latency_penalty
+    return max(1.0, min(5.0, score))
+
+
+def compute_qoe_by_class(stats_by_class: dict) -> dict:
+    """
+    QoE scoring layer built ON TOP OF compute_packet_stats_by_class()'s
+    output (Step 10.C) - takes that function's return value directly as
+    input, does not recompute anything from raw Packets itself. Adds 2
+    new keys per class:
+      qoe_score - voice: a real MOS (1.0-4.5) via _voice_e_model_mos().
+                  video: a simulator-local 1.0-5.0 heuristic via
+                  _video_qoe_proxy_score() - NOT comparable to voice's
+                  MOS scale or any standardized video metric.
+                  best_effort/background (and any unrecognized class):
+                  None - QoE (perceived quality by a human observer) is
+                  not a meaningful concept for non-interactive best-
+                  effort/background data traffic the way it is for
+                  voice/video, so no score is invented for them.
+      qoe_model - a short string identifying which model/formula
+                  produced qoe_score (or None to match qoe_score=None),
+                  so a caller reading a printed/exported result always
+                  knows a voice MOS and a video proxy score are NOT the
+                  same kind of number even though both happen to look
+                  like "a number between 1 and 5".
+
+    Returns a NEW dict (does not mutate the input stats_by_class or its
+    per-class dicts) with every existing key from the input preserved
+    plus the 2 new ones above.
+    """
+    result = {}
+    for cls, stats in stats_by_class.items():
+        stats = dict(stats)  # shallow copy - don't mutate caller's dict
+        if cls == "voice":
+            r_factor, mos = _voice_e_model_mos(stats.get("avg_latency_us"), stats.get("loss_rate"))
+            stats["qoe_score"] = mos
+            stats["qoe_r_factor"] = r_factor
+            stats["qoe_model"] = "E-model (ITU-T G.107, Cole & Rosenbluth 2001 simplified formula, G.711 codec)"
+        elif cls == "video":
+            score = _video_qoe_proxy_score(
+                stats.get("avg_latency_us"), stats.get("loss_rate"), stats.get("sla_budget_us"),
+            )
+            stats["qoe_score"] = score
+            stats["qoe_model"] = "video_qoe_proxy (simulator-local heuristic, NOT a standardized metric)"
+        else:
+            stats["qoe_score"] = None
+            stats["qoe_model"] = None
+        result[cls] = stats
+    return result
+# Rashed-Step 10.D-08-11-2026-end
+
+
 # Rashed-Step 9.D-08-07-2026-start
 # Packet-level CSV export - optional (opt-in via singleRun.py's
 # --export-packets-csv, unset by default), for offline analysis at
