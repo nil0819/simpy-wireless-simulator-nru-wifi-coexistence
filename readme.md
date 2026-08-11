@@ -80,7 +80,8 @@ Flag groups (see `--help` for exact names/defaults/full descriptions):
 - **PHY realism (Step 5)**: `--shadowing-sigma-db`, `--wifi-bandwidth-mhz`/`--nru-bandwidth-mhz`, `--wifi-noise-figure-db`/`--nru-noise-figure-db`, `--nru-mcs`, `--wifi-sinr-thr-db-override`/`--nru-sinr-thr-db-override`, `--wifi-freq-ghz`/`--nru-freq-ghz`, `--wifi-tx-power-dbm`/`--nru-tx-power-dbm` (checked against FCC U-NII EIRP caps at startup, warning only)
 - **Mobility (Step 5.G)**: `--ap-mobility-speed-mps`, `--gnb-mobility-speed-mps`, `--sta-mobility-speed-mps`, `--ue-mobility-speed-mps`, `--mobility-pause-s`
 - **Traffic model / real packets (Step 8)**: `--wifi-traffic-model`/`--nru-traffic-model` (`saturated`/`poisson`/`cbr`), `--wifi-arrival-rate-pps`/`--nru-arrival-rate-pps`, `--wifi-packet-size-bytes`/`--nru-packet-size-bytes`
-- **Packet-level CSV export (Step 9.D)**: `--export-packets-csv <path>` - appends one row per packet (technology, node, id, source/destination, sizes, status, latency) for offline analysis
+- **Packet-level CSV export (Step 9.D/10.E)**: `--export-packets-csv <path>` - appends one row per packet (technology, node, id, source/destination, sizes, status, latency, traffic class) for offline analysis
+- **QoS/QoE (Step 10.A-10.D, Wi-Fi)**: `--wifi-traffic-class-mix`/`--nru-traffic-class-mix` (repeatable `class=weight`, tags packets voice/video/best_effort/background), `--wifi-edca` (real 802.11e differentiated channel access per class, Wi-Fi only, requires `--wifi-traffic-model=saturated`) - printed per-class latency/loss/SLA-compliance stats and QoE scores (voice: real E-model MOS; video: a labeled heuristic proxy) come free once a class mix is set, no extra flag needed
 - **Rogue AP**: `--rogue True` (routes AP traffic through `attacker/roguewificad.py`'s CAD-attack model instead of benign Wi-Fi)
 
 Example:
@@ -97,7 +98,7 @@ SEED = 1 N_stations:=2 N_gNB:=2  CW_MIN = 15 CW_MAX = 63 WiFi pcol:=0.1217 WiFi 
 fairness: 0.5398053473945499
 joint: 0.4984111300570852
 ```
-(Plus, since Step 8.G/9.A, per-technology and per-node packet stats: delivery/loss counts, average/min/max/stddev/jitter/p50/p95/p99 latency.)
+(Plus, since Step 8.G/9.A, per-technology and per-node packet stats: delivery/loss counts, average/min/max/stddev/jitter/p50/p95/p99 latency. Since Step 10.C/10.D, also per-traffic-class stats with SLA-budget compliance and QoE scores - "best_effort" is the only class shown unless `--wifi/nru-traffic-class-mix` is set.)
 
 ### Licensed 5G NR, standalone (`singleRunNR.py`)
 
@@ -133,7 +134,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-83 tests passing as of Step 9.D. Individual files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+129 tests passing as of Step 10.E. Individual files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -148,6 +149,7 @@ pytest test/
 ----> Step 8 (8.A-8.G) — Real Packet abstraction: Packet/TrafficConfig data structures, per-node queue with saturated/poisson/cbr traffic models, packet-size-driven Wi-Fi PPDU duration, NR-U retry-limit parity fix, r_limit-exceeded queue-routing fix, real ACK packets, latency/loss stats collector
 ----> Step 9 (9.A-9.D) — Extended traffic analytics (jitter/percentile latency/per-node breakdown), real Packet visibility wired into GenericWirelessDevice, packet-level attacker capabilities (spoofing + replay, PacketAttacker + a full runnable scenario), packet-level CSV export
 ----> Step pre_10 — readme.md full refresh to reflect Steps 5-9
+----> Step 10 (10.A-10.E) — QoS/QoE: traffic-class tagging (voice/video/best_effort/background), real 802.11e EDCA differentiated channel access for Wi-Fi (per-AC virtual contention, opt-in via `--wifi-edca`), per-class latency/loss stats with SLA-budget compliance, QoE scoring (voice: real simplified ITU-T G.107 E-model MOS; video: a clearly-labeled heuristic proxy), traffic_class column added to the packet-level CSV export
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 

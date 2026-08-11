@@ -511,6 +511,9 @@ def test_packet_to_csv_row_delivered_has_numeric_latency():
         7, "WiFi", "AP 1", "p1", "a", "b",
         100, 40, 140, "DATA",
         100.0, 0, "DELIVERED", 350.0, 250.0,
+        # Rashed-Step 10.E-08-11-2026-start
+        "best_effort",  # traffic_class - new column, appended at the end
+        # Rashed-Step 10.E-08-11-2026-end
     ]
 
 
@@ -1055,6 +1058,50 @@ def test_compute_qoe_by_class_does_not_mutate_input_dict():
 # Rashed-Step 10.D-08-11-2026-end
 
 
+# Rashed-Step 10.E-08-11-2026-start
+"""
+Step 10.E unit tests: the traffic_class column added to the Step 9.D
+packet-level CSV export (deferred from Step 10.A).
+"""
+
+
+def test_packet_csv_header_ends_with_traffic_class():
+    assert PACKET_CSV_HEADER[-1] == "traffic_class"
+
+
+def test_packet_to_csv_row_reports_the_packets_own_traffic_class():
+    p = _make_delivered("v1", created_at=0.0, latency=1000.0, traffic_class="voice")
+    row = packet_to_csv_row(p, seed=1, technology="WiFi", node="AP 1")
+    assert row[-1] == "voice"
+    assert len(row) == len(PACKET_CSV_HEADER)
+
+
+def test_export_packets_csv_includes_traffic_class_column_for_each_class():
+    import csv
+    import tempfile
+    import os as _os
+
+    fd, path = tempfile.mkstemp(suffix=".csv")
+    _os.close(fd)
+    _os.remove(path)
+    try:
+        wifi_logs = {"AP 1": [
+            _make_delivered("v1", 0, 100, traffic_class="voice"),
+            _make_dropped("b1", 0, traffic_class="background"),
+        ]}
+        export_packets_csv(path, seed=1, node_packet_logs_by_tech={"WiFi": wifi_logs, "NRU": {}})
+        with open(path, newline="") as f:
+            rows = list(csv.reader(f))
+        assert rows[0] == PACKET_CSV_HEADER
+        traffic_class_col = PACKET_CSV_HEADER.index("traffic_class")
+        assert rows[1][traffic_class_col] == "voice"
+        assert rows[2][traffic_class_col] == "background"
+    finally:
+        if _os.path.exists(path):
+            _os.remove(path)
+# Rashed-Step 10.E-08-11-2026-end
+
+
 # Rashed-Step 8.A-08-06-2026-start
 if __name__ == "__main__":
     tests = [
@@ -1130,6 +1177,11 @@ if __name__ == "__main__":
         test_qoe_by_class_none_for_best_effort_and_background,
         test_compute_qoe_by_class_does_not_mutate_input_dict,
         # Rashed-Step 10.D-08-11-2026-end
+        # Rashed-Step 10.E-08-11-2026-start
+        test_packet_csv_header_ends_with_traffic_class,
+        test_packet_to_csv_row_reports_the_packets_own_traffic_class,
+        test_export_packets_csv_includes_traffic_class_column_for_each_class,
+        # Rashed-Step 10.E-08-11-2026-end
     ]
     passed = 0
     failed = 0

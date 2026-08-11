@@ -634,6 +634,19 @@ PACKET_CSV_HEADER = [
     "seed", "technology", "node", "packet_id", "source", "destination",
     "payload_bytes", "header_bytes", "total_bytes", "packet_type",
     "created_at_us", "retry_count", "status", "delivered_at_us", "latency_us",
+    # Rashed-Step 10.E-08-11-2026-start
+    # Deferred from Step 10.A ("No CLI/simulation.py prints of the
+    # class mix, no CSV column (10.E)") - appended at the END of the
+    # header, same reasoning as Packet.traffic_class itself being
+    # appended at the end of the dataclass (Step 10.A): existing
+    # column INDICES for every column before this one are unchanged,
+    # so any offline script already parsing this CSV by position keeps
+    # working; only a script that assumes a FIXED total column count
+    # would need updating, and appending a header once per file means
+    # that's a one-time, visible break (a header row present, not a
+    # silent index misalignment).
+    "traffic_class",
+    # Rashed-Step 10.E-08-11-2026-end
 ]
 
 
@@ -659,6 +672,9 @@ def packet_to_csv_row(packet: Packet, seed, technology: str, node: str) -> list:
         packet.created_at, packet.retry_count, packet.status,
         packet.delivered_at if packet.delivered_at is not None else "",
         latency_us,
+        # Rashed-Step 10.E-08-11-2026-start
+        packet.traffic_class,
+        # Rashed-Step 10.E-08-11-2026-end
     ]
 
 
