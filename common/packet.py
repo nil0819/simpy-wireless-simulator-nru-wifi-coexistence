@@ -619,6 +619,51 @@ def compute_qoe_by_class(stats_by_class: dict) -> dict:
 # Rashed-Step 10.D-08-11-2026-end
 
 
+# Rashed-Step 12.A-08-13-2026-start
+def write_packet_report(path: str, seed, sections: "dict[str, dict]") -> None:
+    """
+    Append a human-readable packet stats/QoE report block to `path`.
+
+    WHY THIS EXISTS: simulation.py used to print every one of these
+    aggregate/per-node/per-class/QoE dicts (Steps 8.G/9.A/10.C/10.D)
+    directly to stdout, on every single run, unconditionally. Rashed
+    asked (2026-08-13) to keep this information but stop cluttering the
+    console with it - a plain text log file instead of a real packet-
+    capture format (.pcap): pcap is a binary format for raw 802.11/
+    Ethernet FRAMES (specific header bytes, timestamps, payloads) meant
+    for tools like Wireshark - it has no way to represent an aggregate
+    Python dict of stats (loss_rate, percentile latencies, QoE scores,
+    etc.), so it would be the wrong tool here. A plain .log file with
+    the exact same text each line used to print keeps this genuinely
+    useful (still greppable, still diffable against old console output)
+    without misusing a format meant for something else.
+
+    `sections` is an ordered {label: stats_dict} mapping, e.g.
+    {"packet stats WiFi": {...}, "packet stats NRU": {...}, ...} -
+    written one "label: dict" line per entry, in the same str(dict)
+    text a print(label, dict) call used to produce, so this file's
+    content is byte-for-byte comparable to the console output it
+    replaced (just redirected, not reformatted).
+
+    Appends (does not overwrite) so multiple runs (-r N > 1, or
+    repeated CLI invocations against the same path) accumulate,
+    distinguished by a "seed=..." header line before each run's block -
+    same "write, don't clobber, distinguish by seed" convention as
+    export_packets_csv()/lool.csv.
+    """
+    import os
+    from datetime import datetime
+
+    file_already_had_content = os.path.isfile(path) and os.path.getsize(path) > 0
+    with open(path, "a") as f:
+        if file_already_had_content:
+            f.write("\n")
+        f.write(f"=== Packet Report (seed={seed}, {datetime.now().isoformat(timespec='seconds')}) ===\n")
+        for label, stats in sections.items():
+            f.write(f"{label}: {stats}\n")
+# Rashed-Step 12.A-08-13-2026-end
+
+
 # Rashed-Step 9.D-08-07-2026-start
 # Packet-level CSV export - optional (opt-in via singleRun.py's
 # --export-packets-csv, unset by default), for offline analysis at

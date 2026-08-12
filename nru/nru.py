@@ -663,9 +663,22 @@ class Gnb:
         try:
             yield self.env.timeout(tx_dur)
             # Rashed-Step 4.C_2-01-21-2026-start
-            self.sinr_print_ctr += 1
-            if self.sinr_print_ctr % 50 == 0:
-                print(self.env.now, self.name, "NRU SINR(dB) =", self.channel.sinr_db(active))
+            # Rashed-Step 12.A-08-13-2026-start
+            # BUGFIX: commented out - this was a leftover development-
+            # time debug print (every 50th successful NR-U transmission),
+            # never gated behind a verbosity flag, so it cluttered every
+            # normal run's stdout with raw "time name NRU SINR(dB) = ..."
+            # lines mixed in among the real CLI output. wifi.py's exact
+            # equivalent (self.sinr_print_ctr/"WiFi SINR(dB) =") was
+            # already commented out for the same reason - this brings
+            # nru.py to parity. self.sinr_print_ctr itself is left alone
+            # (still incremented nowhere now, harmless leftover field) so
+            # re-enabling this for local debugging later is a 2-line
+            # uncomment, not a re-implementation.
+            # self.sinr_print_ctr += 1
+            # if self.sinr_print_ctr % 50 == 0:
+            #     print(self.env.now, self.name, "NRU SINR(dB) =", self.channel.sinr_db(active))
+            # Rashed-Step 12.A-08-13-2026-end
             # Rashed-Step 4.C_2-01-21-2026-end
             # Rashed-Step 4.D_3-01-29-2026-start
             #was_sent = self.check_collision()

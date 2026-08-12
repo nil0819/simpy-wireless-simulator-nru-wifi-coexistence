@@ -30,6 +30,9 @@ from common.packet import compute_packet_stats_by_class
 # Rashed-Step 10.D-08-11-2026-start
 from common.packet import compute_qoe_by_class
 # Rashed-Step 10.D-08-11-2026-end
+# Rashed-Step 12.A-08-13-2026-start
+from common.packet import write_packet_report
+# Rashed-Step 12.A-08-13-2026-end
 # Rashed-Step 9.D-08-07-2026-start
 from common.packet import export_packets_csv
 # Rashed-Step 9.D-08-07-2026-end
@@ -327,8 +330,18 @@ def run_simulation(
     # got instantiated. AP construction above now uses wifi_config (decided
     # before the loop); reuse it here for the reporting/log lines instead of
     # building a second, disconnected config object.
-    print(is_rogue_wifi)
-    print("Rogue WiFi" if is_rogue_wifi else "Benign WiFi")
+    # Rashed-Step 12.A-08-13-2026-start
+    # BUGFIX: commented out - both were leftover development-time debug
+    # prints (a raw bool, then a redundant "Rogue WiFi"/"Benign WiFi"
+    # label), never gated behind a verbosity flag, so every normal run's
+    # stdout got a stray "False"/"Benign WiFi" pair with no label
+    # explaining what they meant. --rogue is still fully in effect either
+    # way (this only silenced the announcement of it) - use --rogue True/
+    # False and check the actual topology print above (RogueWiFiCAD vs
+    # WiFi instances) if you need to confirm which one is active.
+    # print(is_rogue_wifi)
+    # print("Rogue WiFi" if is_rogue_wifi else "Benign WiFi")
+    # Rashed-Step 12.A-08-13-2026-end
     config = wifi_config
     # Rashed-Step pre_5.D-02-06-2026-end
 
@@ -421,8 +434,15 @@ def run_simulation(
     nru_packets = [p for g in gnbs for p in g.packet_log]
     wifi_pkt_stats = compute_packet_stats(wifi_packets)
     nru_pkt_stats = compute_packet_stats(nru_packets)
-    print("packet stats WiFi:", wifi_pkt_stats)
-    print("packet stats NRU:", nru_pkt_stats)
+    # Rashed-Step 12.A-08-13-2026-start
+    # No longer printed directly to stdout (see below, after every
+    # section is computed) - collected into packet_report_sections
+    # instead and written to a log file via write_packet_report().
+    packet_report_sections = {
+        "packet stats WiFi": wifi_pkt_stats,
+        "packet stats NRU": nru_pkt_stats,
+    }
+    # Rashed-Step 12.A-08-13-2026-end
     # Rashed-Step 8.G-08-06-2026-end
 
     # Rashed-Step 9.A-08-07-2026-start
@@ -433,8 +453,10 @@ def run_simulation(
     # version above, for the same --rogue True reason.
     wifi_node_logs = {ap.name: getattr(ap, "packet_log", []) for ap in wifi_aps}
     nru_node_logs = {g.name: g.packet_log for g in gnbs}
-    print("packet stats WiFi by node:", compute_packet_stats_by_node(wifi_node_logs))
-    print("packet stats NRU by node:", compute_packet_stats_by_node(nru_node_logs))
+    # Rashed-Step 12.A-08-13-2026-start
+    packet_report_sections["packet stats WiFi by node"] = compute_packet_stats_by_node(wifi_node_logs)
+    packet_report_sections["packet stats NRU by node"] = compute_packet_stats_by_node(nru_node_logs)
+    # Rashed-Step 12.A-08-13-2026-end
     # Rashed-Step 9.A-08-07-2026-end
 
     # Rashed-Step 10.C-08-11-2026-start
@@ -452,8 +474,10 @@ def run_simulation(
     # about the existing lines/values changes).
     wifi_stats_by_class = compute_packet_stats_by_class(wifi_packets)
     nru_stats_by_class = compute_packet_stats_by_class(nru_packets)
-    print("packet stats WiFi by class:", wifi_stats_by_class)
-    print("packet stats NRU by class:", nru_stats_by_class)
+    # Rashed-Step 12.A-08-13-2026-start
+    packet_report_sections["packet stats WiFi by class"] = wifi_stats_by_class
+    packet_report_sections["packet stats NRU by class"] = nru_stats_by_class
+    # Rashed-Step 12.A-08-13-2026-end
     # Rashed-Step 10.C-08-11-2026-end
 
     # Rashed-Step 10.D-08-11-2026-start
@@ -467,9 +491,20 @@ def run_simulation(
     # interactive data traffic). Same regression-safe shape as 10.C:
     # unconditional, additive-only - a default run just adds one
     # "best_effort" class with qoe_score=None, no existing line changes.
-    print("packet QoE WiFi by class:", compute_qoe_by_class(wifi_stats_by_class))
-    print("packet QoE NRU by class:", compute_qoe_by_class(nru_stats_by_class))
+    # Rashed-Step 12.A-08-13-2026-start
+    packet_report_sections["packet QoE WiFi by class"] = compute_qoe_by_class(wifi_stats_by_class)
+    packet_report_sections["packet QoE NRU by class"] = compute_qoe_by_class(nru_stats_by_class)
     # Rashed-Step 10.D-08-11-2026-end
+
+    # All 8 packet-stats/QoE sections are now collected (not printed to
+    # stdout - see the individual Rashed-Step 12.A blocks above). Write
+    # them to a separate packet.log file instead, per Rashed's request
+    # ("Keep this as a separate log file naming packet.log ... Not in
+    # the output"). One call, appends one full report block per run
+    # (see write_packet_report()'s own docstring in common/packet.py
+    # for why plain text was chosen over .pcap).
+    write_packet_report("packet.log", seed, packet_report_sections)
+    # Rashed-Step 12.A-08-13-2026-end
 
     # Rashed-Step 9.D-08-07-2026-start
     # Opt-in packet-level CSV export - only touches the filesystem when
