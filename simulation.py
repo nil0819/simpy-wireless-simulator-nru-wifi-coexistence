@@ -629,22 +629,37 @@ def run_simulation(
     joint = fairness * normalized_channel_occupancy_time_all
     print(f'joint: {joint}')
 
-    write_header = True
-    if os.path.isfile(output_csv):
-        write_header = False
-    with open(output_csv, mode='a', newline="") as result_file:
-        result_adder = csv.writer(
-            result_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
-
-        if write_header:
-            result_adder.writerow(
-                ['Seed,WiFi,Gnb,ChannelOccupancyWiFi,ChannelEfficiencyWiFi,PcolWifi,ChannelOccupancyNR,ChannelEfficiencyNR,PcolNR,ChannelOccupancyAll,ChannelEfficiencyAll'])
-
-        result_adder.writerow(
-            [seed, config.cw_max, fairness, number_of_stations, number_of_gnb, normalized_channel_occupancy_time, normalized_channel_efficiency,
-             p_coll,
-             normalized_channel_occupancy_time_NR, normalized_channel_efficiency_NR, p_coll_NR,
-             normalized_channel_occupancy_time_all, normalized_channel_efficiency_all])
-        
+    # Rashed-Step pre_11.E-08-18-2026-start
+    # Retired the unconditional lool.csv writer that used to run here
+    # (original pre-fork code, no Rashed-Step marker of its own - every
+    # run silently appended a row to lool.csv regardless of any CLI
+    # flag). Rashed asked to remove it: "there is no need for that"
+    # (2026-08-18), now that Step 9.D's export_packets_csv() and Step
+    # pre_11.B's packet.log give proper, opt-in, per-run output instead.
+    # It was also known-buggy - see common/packet.py's own comment on
+    # PACKET_CSV_HEADER: lool.csv's header was a single quoted field
+    # with embedded commas instead of separate columns, and its header/
+    # data column counts didn't match. Commented out rather than
+    # deleted outright, matching this file's own precedent for retired
+    # blocks (Step pre_11.B's debug prints). output_csv (common/
+    # common.py) is now unused by this function.
+    #
+    # write_header = True
+    # if os.path.isfile(output_csv):
+    #     write_header = False
+    # with open(output_csv, mode='a', newline="") as result_file:
+    #     result_adder = csv.writer(
+    #         result_file, delimiter=',', quotechar='"', quoting=csv.QUOTE_MINIMAL)
+    #
+    #     if write_header:
+    #         result_adder.writerow(
+    #             ['Seed,WiFi,Gnb,ChannelOccupancyWiFi,ChannelEfficiencyWiFi,PcolWifi,ChannelOccupancyNR,ChannelEfficiencyNR,PcolNR,ChannelOccupancyAll,ChannelEfficiencyAll'])
+    #
+    #     result_adder.writerow(
+    #         [seed, config.cw_max, fairness, number_of_stations, number_of_gnb, normalized_channel_occupancy_time, normalized_channel_efficiency,
+    #          p_coll,
+    #          normalized_channel_occupancy_time_NR, normalized_channel_efficiency_NR, p_coll_NR,
+    #          normalized_channel_occupancy_time_all, normalized_channel_efficiency_all])
+    # Rashed-Step pre_11.E-08-18-2026-end
 
 

@@ -1,0 +1,11 @@
+# Rashed-Step pre_11.E-08-18-2026-start
+# Added to stop the CRLF/LF churn found during Step pre_11.E's cleanup:
+# several files (attacker/roguewifijammer.py, attacker/
+# roguewifiselfbackoff.py, channel/channel2.py, test/test_ed_curve.py,
+# requirements.txt) showed as permanently "modified" every session with
+# zero real content difference (confirmed via `git diff -w`) - purely
+# CRLF line endings introduced by editing on Windows while the repo's
+# committed content uses LF. This normalizes text files to LF in the
+# repository regardless of what line ending an editor writes locally.
+* text=auto eol=lf
+# Rashed-Step pre_11.E-08-18-2026-end

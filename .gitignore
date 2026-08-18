@@ -12,6 +12,8 @@ lool.csv
 # OS
 .DS_Store
 
+# Editor
+.vscode/
 
 # Test log
 .test/log
