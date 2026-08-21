@@ -82,6 +82,7 @@ Flag groups (see `--help` for exact names/defaults/full descriptions):
 - **Traffic model / real packets (Step 8)**: `--wifi-traffic-model`/`--nru-traffic-model` (`saturated`/`poisson`/`cbr`), `--wifi-arrival-rate-pps`/`--nru-arrival-rate-pps`, `--wifi-packet-size-bytes`/`--nru-packet-size-bytes`
 - **Packet-level CSV export (Step 9.D/10.E)**: `--export-packets-csv <path>` - appends one row per packet (technology, node, id, source/destination, sizes, status, latency, traffic class) for offline analysis
 - **QoS/QoE (Step 10.A-10.D, Wi-Fi)**: `--wifi-traffic-class-mix`/`--nru-traffic-class-mix` (repeatable `class=weight`, tags packets voice/video/best_effort/background), `--wifi-edca` (real 802.11e differentiated channel access per class, Wi-Fi only, requires `--wifi-traffic-model=saturated`) - printed per-class latency/loss/SLA-compliance stats and QoE scores (voice: real E-model MOS; video: a labeled heuristic proxy) come free once a class mix is set, no extra flag needed
+- **Dynamic rate adaptation (Step 11)**: `--wifi-rate-adapt` (per-STA ARF - Auto Rate Fallback, Kamerman & Monteban 1997: step MCS up after 10 consecutive successes, down after 2 consecutive failures, no channel-state feedback), `--nru-rate-adapt` (per-UE CQI-style - picks the MCS whose required-SINR threshold best fits the most recently measured link SINR, approximating 3GPP UE-reported Channel Quality Indicator feedback). Both default off (`-m`/`--mcs-value` and `--nru-mcs` stay fixed for the whole run, unchanged from every pre-Step-11 run).
 - **Rogue AP**: `--rogue True` (routes AP traffic through `attacker/roguewificad.py`'s CAD-attack model instead of benign Wi-Fi)
 
 Example:
@@ -134,7 +135,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-129 tests passing as of Step 10.E. Individual files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+174 tests passing as of Step 11. Individual files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -150,6 +151,8 @@ pytest test/
 ----> Step 9 (9.A-9.D) — Extended traffic analytics (jitter/percentile latency/per-node breakdown), real Packet visibility wired into GenericWirelessDevice, packet-level attacker capabilities (spoofing + replay, PacketAttacker + a full runnable scenario), packet-level CSV export
 ----> Step pre_10 — readme.md full refresh to reflect Steps 5-9
 ----> Step 10 (10.A-10.E) — QoS/QoE: traffic-class tagging (voice/video/best_effort/background), real 802.11e EDCA differentiated channel access for Wi-Fi (per-AC virtual contention, opt-in via `--wifi-edca`), per-class latency/loss stats with SLA-budget compliance, QoE scoring (voice: real simplified ITU-T G.107 E-model MOS; video: a clearly-labeled heuristic proxy), traffic_class column added to the packet-level CSV export
+----> Step pre_11 (A-E) — analytical validation `model/` package (Bianchi DCF + CAD-paper DTMC, plus a w=1..6 sweep harness), console-output cleanup (packet stats moved to `packet.log`), repo hygiene pass
+----> Step 11 — dynamic per-link MCS rate adaptation: `--wifi-rate-adapt` (ARF - Auto Rate Fallback, Kamerman & Monteban 1997: blind consecutive-success/failure counters, matching real legacy 802.11 hardware), `--nru-rate-adapt` (CQI-style - picks the MCS that best fits the most recently measured link SINR, approximating 3GPP UE-reported Channel Quality Indicator feedback). Both opt-in, both default off (byte-identical to every pre-Step-11 run)
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 

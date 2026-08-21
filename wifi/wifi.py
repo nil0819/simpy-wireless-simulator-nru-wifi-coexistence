@@ -94,6 +94,23 @@ class Config:
     edca_params: Optional[Dict[str, EdcaAcParams]] = None
     # Rashed-Step 10.B-08-07-2026-end
 
+    # Rashed-Step 11.A-08-21-2026-start
+    # Dynamic rate adaptation (Step 11) - ARF-style (Kamerman & Monteban
+    # 1997): step MCS up after N consecutive successes, down after M
+    # consecutive failures, tracked per associated STA. False (default)
+    # = self.config.mcs is used exactly as before this step (fixed for
+    # the whole run) - zero behavior change, zero new state touched.
+    # See "Project details/Step 11.txt" for the full design.
+    rate_adapt_enabled: bool = False
+    # 10 consecutive successes -> step up one MCS. This is the classic
+    # ARF "probe a faster rate" threshold from the original paper.
+    rate_adapt_up_streak: int = 10
+    # 2 consecutive failures -> step down one MCS. The original 1997
+    # ARF paper uses 1-2 depending on variant; 2 avoids a single unlucky
+    # SINR dip immediately crashing the rate (a documented refinement).
+    rate_adapt_down_streak: int = 2
+    # Rashed-Step 11.A-08-21-2026-end
+
 
 
 class WiFi:
@@ -199,6 +216,12 @@ class WiFi:
     ):
         self.config = config
         self.times = Times(config.data_size, config.mcs)  # using Times script to get time calculations
+        # Rashed-Step 11.A-08-21-2026-start
+        # Per-STA rate-adaptation state (see Config.rate_adapt_enabled).
+        # Keyed by STA name, lazily populated on first use - empty dict
+        # costs nothing when rate adaptation is disabled (the default).
+        self.link_rate_state: Dict[str, Dict[str, int]] = {}
+        # Rashed-Step 11.A-08-21-2026-end
         self.name = name  # name of the station
         self.env = env  # simpy environment
         self.col = random.choice(colors)  # color of output -- for future station distinction
@@ -565,6 +588,9 @@ class WiFi:
             required_sinr = self.required_sinr_db()
             log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config.mcs}) = {required_sinr:.2f} dB (EDCA {ac})")
             was_sent = (sinr >= required_sinr)
+            # Rashed-Step 11.A-08-21-2026-start
+            self.rate_adapt_record_result(self.rate_adapt_link_key(), was_sent)
+            # Rashed-Step 11.A-08-21-2026-end
 
             if was_sent:
                 self.sent_completed_edca(ac)
@@ -983,6 +1009,10 @@ class WiFi:
             # Rashed-Step 5.D-02-06-2026-end
             #was_sent = self.check_collision()
             was_sent = (sinr >= required_sinr)
+            # Rashed-Step 11.A-08-21-2026-start
+            # ARF feedback - no-op when rate adaptation is disabled.
+            self.rate_adapt_record_result(self.rate_adapt_link_key(), was_sent)
+            # Rashed-Step 11.A-08-21-2026-end
 
             if was_sent:
                 self.sent_completed()
@@ -1121,7 +1151,24 @@ class WiFi:
         # total_bytes() would double-count the header that
         # _make_packet() derived from that same constant.
         payload_bytes = packet.payload_bytes if packet is not None else self.config.data_size
-        frame_length = self.times.get_ppdu_frame_time(payload_bytes)
+        # Rashed-Step 11.A-08-21-2026-start
+        # UPGRADE: when rate adaptation has moved this link off the
+        # originally-configured MCS, self.times (built once in __init__
+        # from config.mcs and never rebuilt - see that constructor) would
+        # silently keep computing duration at the OLD rate forever. Build
+        # a fresh Times for the CURRENT adapted MCS instead, but only
+        # when adaptation is actually enabled - self.times is reused
+        # as-is otherwise, so this is byte-identical to before Step 11
+        # whenever Config.rate_adapt_enabled is False (the default).
+        # Also covers the EDCA path for free: send_frame_edca()'s frame
+        # comes from this same generate_new_frame() call (via
+        # _refresh_ac_frame()), so no separate EDCA-specific fix needed.
+        if self.config.rate_adapt_enabled:
+            current_mcs = self.current_mcs_for_link(self.rate_adapt_link_key())
+            frame_length = Times(payload_bytes, current_mcs).get_ppdu_frame_time(payload_bytes)
+        else:
+            frame_length = self.times.get_ppdu_frame_time(payload_bytes)
+        # Rashed-Step 11.A-08-21-2026-end
         # Rashed-Step 8.C-08-06-2026-end
         # Rashed-Step pre_5.C-02-06-2026-end
 
@@ -1169,13 +1216,71 @@ class WiFi:
     # Rashed-Step 5.D-02-06-2026-start
     def required_sinr_db(self) -> float:
         """
-        Required SINR for this AP's configured MCS, or the flat override
-        if config.wifi_sinr_thr_db_override is set.
+        Required SINR for this AP's current MCS (rate-adapted if
+        Config.rate_adapt_enabled, else the fixed configured value), or
+        the flat override if config.wifi_sinr_thr_db_override is set.
         """
         if self.config.wifi_sinr_thr_db_override is not None:
             return self.config.wifi_sinr_thr_db_override
-        return mcs_sinr_threshold_db(WIFI_MCS_SINR_THRESHOLDS_DB, self.config.mcs)
+        # Rashed-Step 11.A-08-21-2026-start
+        mcs = self.current_mcs_for_link(self.rate_adapt_link_key())
+        # Rashed-Step 11.A-08-21-2026-end
+        return mcs_sinr_threshold_db(WIFI_MCS_SINR_THRESHOLDS_DB, mcs)
     # Rashed-Step 5.D-02-06-2026-end
+
+    # Rashed-Step 11.A-08-21-2026-start
+    def rate_adapt_link_key(self) -> Optional[str]:
+        """
+        Identifies which per-link rate-adaptation state to use. Matches
+        send_frame()/send_frame_edca()'s ACTUAL real transmission
+        target (self.sta_list[0] - see their own rx_pos computation),
+        not generate_new_frame()'s random.choice() (that's a diagnostic-
+        only snapshot, not what really gets transmitted to - see that
+        method's own comment). None when there's no associated STA at
+        all (rate adaptation has nothing to track).
+        """
+        return self.sta_list[0].name if self.sta_list else None
+
+    def current_mcs_for_link(self, link_key: Optional[str]) -> int:
+        """
+        The MCS to use RIGHT NOW for `link_key`. Returns config.mcs
+        unchanged when rate adaptation is disabled, the link has no
+        state yet (first transmission), or link_key is None - so
+        "adaptation off" and "adaptation on, before any feedback"
+        both behave exactly like today.
+        """
+        if not self.config.rate_adapt_enabled or link_key is None:
+            return self.config.mcs
+        state = self.link_rate_state.get(link_key)
+        return state["mcs"] if state is not None else self.config.mcs
+
+    def rate_adapt_record_result(self, link_key: Optional[str], success: bool) -> None:
+        """
+        ARF feedback: call once per completed transmission attempt with
+        whether it succeeded. No-op when rate adaptation is disabled or
+        link_key is None (keeps link_rate_state empty in that case, not
+        just unused - see current_mcs_for_link()).
+        """
+        if not self.config.rate_adapt_enabled or link_key is None:
+            return
+        min_mcs = min(WIFI_MCS_SINR_THRESHOLDS_DB.keys())
+        max_mcs = max(WIFI_MCS_SINR_THRESHOLDS_DB.keys())
+        state = self.link_rate_state.setdefault(
+            link_key, {"mcs": self.config.mcs, "succ_streak": 0, "fail_streak": 0}
+        )
+        if success:
+            state["succ_streak"] += 1
+            state["fail_streak"] = 0
+            if state["succ_streak"] >= self.config.rate_adapt_up_streak:
+                state["mcs"] = min(state["mcs"] + 1, max_mcs)
+                state["succ_streak"] = 0
+        else:
+            state["fail_streak"] += 1
+            state["succ_streak"] = 0
+            if state["fail_streak"] >= self.config.rate_adapt_down_streak:
+                state["mcs"] = max(state["mcs"] - 1, min_mcs)
+                state["fail_streak"] = 0
+    # Rashed-Step 11.A-08-21-2026-end
 
     def sent_failed(self):
         log(self, "There was a collision")

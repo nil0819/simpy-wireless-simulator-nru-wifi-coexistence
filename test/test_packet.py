@@ -35,7 +35,7 @@ from common.packet import (
 )
 from common.common import Frame
 from channel.channel import ActiveTx, Channel
-from nru.nru import Transmission_NR, Gnb, Config_NR
+from nru.nru import Transmission_NR, Gnb, Config_NR, mcs_sinr_threshold_db, NRU_MCS_SINR_THRESHOLDS_DB
 from wifi.wifi import WiFi, Config
 # Rashed-Step 10.B-08-07-2026-start
 from Times import Times
@@ -1102,6 +1102,279 @@ def test_export_packets_csv_includes_traffic_class_column_for_each_class():
 # Rashed-Step 10.E-08-11-2026-end
 
 
+# Rashed-Step 11.A-08-21-2026-start
+"""
+Step 11.A unit tests: dynamic per-STA MCS rate adaptation for Wi-Fi,
+ARF-style (Auto Rate Fallback, Kamerman & Monteban 1997). Covers: the
+disabled-by-default regression guard, the up/down streak state
+machine in isolation (no simulation env needed - rate_adapt_record_
+result()/current_mcs_for_link() are plain synchronous methods),
+clamping at the MCS table's bounds, per-link independence, and that
+required_sinr_db()/generate_new_frame() both actually pick up the
+adapted MCS (not just the internal state dict). See "Project details/
+Step 11.txt" for the full design.
+"""
+
+
+def _make_test_rate_adapt_wifi(mcs=7, rate_adapt_enabled=True, up_streak=10, down_streak=2):
+    """Same minimal-construction pattern as _make_test_wifi() above, but
+    with a caller-supplied Config so tests can control mcs/rate_adapt_*."""
+    env = simpy.Environment()
+    channel = Channel(
+        tx_queue=simpy.PriorityResource(env, capacity=1),
+        tx_lock=simpy.Resource(env, capacity=1),
+        n_of_stations=1,
+        n_of_gNB=0,
+        backoffs={},
+        airtime_data={},
+        airtime_control={},
+        airtime_data_NR={},
+        airtime_control_NR={},
+    )
+    channel.airtime_data["AP 1"] = 0
+    channel.airtime_control["AP 1"] = 0
+
+    class _FakeSta:
+        name = "STA 1-1"
+        def current_pos(self):
+            return (1.0, 0.0)
+
+    cfg = Config(
+        mcs=mcs, rate_adapt_enabled=rate_adapt_enabled,
+        rate_adapt_up_streak=up_streak, rate_adapt_down_streak=down_streak,
+    )
+    ap = WiFi(env, "AP 1", channel, (0.0, 0.0), [_FakeSta()], cfg)
+    return ap
+
+
+def test_rate_adapt_disabled_leaves_mcs_and_state_untouched():
+    # Regression guard: the default (rate_adapt_enabled=False) must be
+    # byte-identical to every pre-Step-11 run - required_sinr_db()
+    # always reflects config.mcs, and link_rate_state stays EMPTY (not
+    # just unused) even after many recorded results, since rate_adapt_
+    # record_result() must no-op entirely when disabled.
+    ap = _make_test_rate_adapt_wifi(mcs=3, rate_adapt_enabled=False)
+    key = ap.rate_adapt_link_key()
+    assert key == "STA 1-1"
+    for _ in range(20):
+        ap.rate_adapt_record_result(key, success=True)
+    assert ap.link_rate_state == {}
+    assert ap.current_mcs_for_link(key) == 3
+    from Times import WIFI_MCS_SINR_THRESHOLDS_DB
+    from common.common_phy import mcs_sinr_threshold_db
+    assert ap.required_sinr_db() == mcs_sinr_threshold_db(WIFI_MCS_SINR_THRESHOLDS_DB, 3)
+
+
+def test_rate_adapt_steps_up_after_success_streak():
+    ap = _make_test_rate_adapt_wifi(mcs=3, up_streak=10, down_streak=2)
+    key = ap.rate_adapt_link_key()
+    for _ in range(9):
+        ap.rate_adapt_record_result(key, success=True)
+    assert ap.current_mcs_for_link(key) == 3, "must not step up before the streak threshold is reached"
+    ap.rate_adapt_record_result(key, success=True)  # 10th consecutive success
+    assert ap.current_mcs_for_link(key) == 4, "must step up exactly one MCS after up_streak successes"
+    assert ap.link_rate_state[key]["succ_streak"] == 0, "streak must reset after stepping"
+
+
+def test_rate_adapt_steps_down_after_failure_streak():
+    ap = _make_test_rate_adapt_wifi(mcs=5, up_streak=10, down_streak=2)
+    key = ap.rate_adapt_link_key()
+    ap.rate_adapt_record_result(key, success=False)
+    assert ap.current_mcs_for_link(key) == 5, "must not step down before the streak threshold is reached"
+    ap.rate_adapt_record_result(key, success=False)  # 2nd consecutive failure
+    assert ap.current_mcs_for_link(key) == 4, "must step down exactly one MCS after down_streak failures"
+    assert ap.link_rate_state[key]["fail_streak"] == 0, "streak must reset after stepping"
+
+
+def test_rate_adapt_success_resets_failure_streak_and_vice_versa():
+    ap = _make_test_rate_adapt_wifi(mcs=5, up_streak=10, down_streak=2)
+    key = ap.rate_adapt_link_key()
+    ap.rate_adapt_record_result(key, success=False)
+    assert ap.link_rate_state[key]["fail_streak"] == 1
+    ap.rate_adapt_record_result(key, success=True)
+    assert ap.link_rate_state[key]["fail_streak"] == 0, "a success must reset the failure streak"
+    assert ap.link_rate_state[key]["succ_streak"] == 1
+    ap.rate_adapt_record_result(key, success=False)
+    assert ap.link_rate_state[key]["succ_streak"] == 0, "a failure must reset the success streak"
+
+
+def test_rate_adapt_clamps_at_table_bounds():
+    # Already at MCS 7 (the table's max) - more successes must not
+    # overflow past it or crash.
+    ap = _make_test_rate_adapt_wifi(mcs=7, up_streak=1, down_streak=2)
+    key = ap.rate_adapt_link_key()
+    for _ in range(5):
+        ap.rate_adapt_record_result(key, success=True)
+    assert ap.current_mcs_for_link(key) == 7
+
+    # Already at MCS 0 (the table's min) - more failures must not go
+    # negative or crash.
+    ap2 = _make_test_rate_adapt_wifi(mcs=0, up_streak=10, down_streak=1)
+    key2 = ap2.rate_adapt_link_key()
+    for _ in range(5):
+        ap2.rate_adapt_record_result(key2, success=False)
+    assert ap2.current_mcs_for_link(key2) == 0
+
+
+def test_rate_adapt_state_is_per_link():
+    ap = _make_test_rate_adapt_wifi(mcs=3, up_streak=2, down_streak=2)
+    ap.rate_adapt_record_result("STA-A", success=True)
+    ap.rate_adapt_record_result("STA-A", success=True)  # STA-A steps up to 4
+    ap.rate_adapt_record_result("STA-B", success=False)
+    ap.rate_adapt_record_result("STA-B", success=False)  # STA-B steps down to 2
+    assert ap.current_mcs_for_link("STA-A") == 4
+    assert ap.current_mcs_for_link("STA-B") == 2
+    assert ap.current_mcs_for_link("STA-C") == 3, "an unseen link must still fall back to config.mcs"
+
+
+def test_rate_adapt_required_sinr_db_tracks_current_mcs():
+    from Times import WIFI_MCS_SINR_THRESHOLDS_DB
+    from common.common_phy import mcs_sinr_threshold_db
+    ap = _make_test_rate_adapt_wifi(mcs=3, up_streak=2, down_streak=2)
+    key = ap.rate_adapt_link_key()
+    assert ap.required_sinr_db() == mcs_sinr_threshold_db(WIFI_MCS_SINR_THRESHOLDS_DB, 3)
+    ap.rate_adapt_record_result(key, success=True)
+    ap.rate_adapt_record_result(key, success=True)  # steps up to MCS 4
+    assert ap.required_sinr_db() == mcs_sinr_threshold_db(WIFI_MCS_SINR_THRESHOLDS_DB, 4), \
+        "required_sinr_db() must reflect the ADAPTED mcs, not the originally-configured one"
+
+
+def test_rate_adapt_generate_new_frame_duration_tracks_current_mcs():
+    # A higher MCS must produce a SHORTER frame for the identical
+    # payload - this is what proves generate_new_frame() actually
+    # rebuilds Times() with the current adapted MCS (Step 11.A's fix
+    # for self.times being frozen at construction-time MCS), not just
+    # required_sinr_db() being adapted while duration silently stays
+    # frozen at the original rate.
+    ap = _make_test_rate_adapt_wifi(mcs=0, up_streak=1, down_streak=2)
+    key = ap.rate_adapt_link_key()
+    frame_at_mcs0 = ap.generate_new_frame()
+    ap.rate_adapt_record_result(key, success=True)  # steps up to MCS 1 (up_streak=1)
+    frame_at_mcs1 = ap.generate_new_frame()
+    assert frame_at_mcs1.frame_time < frame_at_mcs0.frame_time, \
+        "a faster (higher) MCS must produce a shorter frame for the same payload"
+
+
+def test_rate_adapt_disabled_generate_new_frame_matches_pre_step11_times():
+    # Regression guard: with rate_adapt_enabled=False, generate_new_
+    # frame() must use self.times exactly as before Step 11 (not a
+    # freshly-constructed Times object every call).
+    ap = _make_test_rate_adapt_wifi(mcs=4, rate_adapt_enabled=False)
+    fr = ap.generate_new_frame()
+    assert fr.frame_time == ap.times.get_ppdu_frame_time(ap.config.data_size)
+# Rashed-Step 11.A-08-21-2026-end
+
+
+# Rashed-Step 11.B-08-21-2026-start
+"""
+Step 11.B unit tests: dynamic per-UE MCS rate adaptation for NR-U,
+CQI-style (pick the MCS whose required-SINR threshold best fits the
+most recently MEASURED link SINR - approximates 3GPP UE-reported
+Channel Quality Indicator feedback). Unlike Wi-Fi's ARF (Step 11.A),
+this has no streak counters - it's a direct SINR-driven pick, tested
+accordingly. See "Project details/Step 11.txt" for the full design.
+"""
+
+
+def _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True):
+    """Same minimal-construction pattern as _make_test_gnb() above, but
+    with a caller-supplied Config_NR so tests can control mcs/rate_
+    adapt_enabled, and a transmission_to_send already set with a real
+    rx_ue - required_sinr_db()/rate_adapt_link_key() both read that."""
+    env = simpy.Environment()
+    channel = Channel(
+        tx_queue=simpy.PriorityResource(env, capacity=1),
+        tx_lock=simpy.Resource(env, capacity=1),
+        n_of_stations=0,
+        n_of_gNB=1,
+        backoffs={},
+        airtime_data={},
+        airtime_control={},
+        airtime_data_NR={},
+        airtime_control_NR={},
+    )
+    channel.airtime_data_NR["Gnb 1"] = 0
+    channel.airtime_control_NR["Gnb 1"] = 0
+
+    class _FakeUe:
+        name = "UE 1-1"
+        def current_pos(self):
+            return (1.0, 0.0)
+
+    cfg = Config_NR(16, 9, 1000, 1000, 1000, 9, 15, 63, 6, mcs=mcs, rate_adapt_enabled=rate_adapt_enabled)
+    g = Gnb(env, "Gnb 1", channel, (0.0, 0.0), [_FakeUe()], cfg)
+    g.transmission_to_send = Transmission_NR(
+        transmission_time=6000, gnb_name="Gnb 1", col="", t_start=0,
+        airtime=6000, rs_time=0, rx_ue=_FakeUe(),
+    )
+    return g
+
+
+def test_nru_rate_adapt_disabled_leaves_mcs_and_state_untouched():
+    # Regression guard: the default (rate_adapt_enabled=False) must be
+    # byte-identical to every pre-Step-11 run.
+    g = _make_test_rate_adapt_gnb(mcs=3, rate_adapt_enabled=False)
+    key = g.rate_adapt_link_key()
+    assert key == "UE 1-1"
+    g.rate_adapt_record_result(key, measured_sinr_db=40.0)
+    assert g.link_rate_state == {}
+    assert g.current_mcs_for_link(key) == 3
+    assert g.required_sinr_db() == mcs_sinr_threshold_db(NRU_MCS_SINR_THRESHOLDS_DB, 3)
+
+
+def test_nru_rate_adapt_no_measurement_yet_falls_back_to_config_mcs():
+    # First transmission on a link: no SINR has been measured yet, so
+    # current_mcs_for_link() must fall back to config_nr.mcs, not crash
+    # or default to some arbitrary table entry.
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True)
+    key = g.rate_adapt_link_key()
+    assert g.current_mcs_for_link(key) == 4
+    assert g.required_sinr_db() == mcs_sinr_threshold_db(NRU_MCS_SINR_THRESHOLDS_DB, 4)
+
+
+def test_nru_rate_adapt_picks_highest_mcs_under_measured_sinr():
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True)
+    key = g.rate_adapt_link_key()
+    # NRU_MCS_SINR_THRESHOLDS_DB: {0:5, 1:7, 2:9, 3:12, 4:15, 5:18, 6:21, 7:24}
+    g.rate_adapt_record_result(key, measured_sinr_db=20.0)
+    assert g.current_mcs_for_link(key) == 5, "20.0 dB clears mcs=5's 18.0 threshold but not mcs=6's 21.0"
+
+
+def test_nru_rate_adapt_recovers_gracefully_below_lowest_threshold():
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True)
+    key = g.rate_adapt_link_key()
+    g.rate_adapt_record_result(key, measured_sinr_db=-5.0)  # below even mcs=0's 5.0 dB
+    assert g.current_mcs_for_link(key) == 0, "must fall back to the table's lowest mcs, not crash"
+
+
+def test_nru_rate_adapt_picks_highest_mcs_at_the_top_of_the_table():
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True)
+    key = g.rate_adapt_link_key()
+    g.rate_adapt_record_result(key, measured_sinr_db=100.0)  # way above mcs=7's 24.0
+    assert g.current_mcs_for_link(key) == 7
+
+
+def test_nru_rate_adapt_required_sinr_db_tracks_last_measurement():
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True)
+    key = g.rate_adapt_link_key()
+    g.rate_adapt_record_result(key, measured_sinr_db=20.0)
+    assert g.required_sinr_db() == mcs_sinr_threshold_db(NRU_MCS_SINR_THRESHOLDS_DB, 5), \
+        "required_sinr_db() must reflect the mcs picked from the last measured SINR"
+    g.rate_adapt_record_result(key, measured_sinr_db=6.0)  # link got much worse
+    assert g.required_sinr_db() == mcs_sinr_threshold_db(NRU_MCS_SINR_THRESHOLDS_DB, 0), \
+        "a later, worse measurement must override the earlier pick, not accumulate/average"
+
+
+def test_nru_rate_adapt_state_is_per_link():
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True)
+    g.rate_adapt_record_result("UE-A", measured_sinr_db=100.0)
+    g.rate_adapt_record_result("UE-B", measured_sinr_db=-5.0)
+    assert g.current_mcs_for_link("UE-A") == 7
+    assert g.current_mcs_for_link("UE-B") == 0
+    assert g.current_mcs_for_link("UE-C") == 4, "an unseen link must still fall back to config_nr.mcs"
+# Rashed-Step 11.B-08-21-2026-end
+
+
 # Rashed-Step 8.A-08-06-2026-start
 if __name__ == "__main__":
     tests = [
@@ -1182,6 +1455,26 @@ if __name__ == "__main__":
         test_packet_to_csv_row_reports_the_packets_own_traffic_class,
         test_export_packets_csv_includes_traffic_class_column_for_each_class,
         # Rashed-Step 10.E-08-11-2026-end
+        # Rashed-Step 11.A-08-21-2026-start
+        test_rate_adapt_disabled_leaves_mcs_and_state_untouched,
+        test_rate_adapt_steps_up_after_success_streak,
+        test_rate_adapt_steps_down_after_failure_streak,
+        test_rate_adapt_success_resets_failure_streak_and_vice_versa,
+        test_rate_adapt_clamps_at_table_bounds,
+        test_rate_adapt_state_is_per_link,
+        test_rate_adapt_required_sinr_db_tracks_current_mcs,
+        test_rate_adapt_generate_new_frame_duration_tracks_current_mcs,
+        test_rate_adapt_disabled_generate_new_frame_matches_pre_step11_times,
+        # Rashed-Step 11.A-08-21-2026-end
+        # Rashed-Step 11.B-08-21-2026-start
+        test_nru_rate_adapt_disabled_leaves_mcs_and_state_untouched,
+        test_nru_rate_adapt_no_measurement_yet_falls_back_to_config_mcs,
+        test_nru_rate_adapt_picks_highest_mcs_under_measured_sinr,
+        test_nru_rate_adapt_recovers_gracefully_below_lowest_threshold,
+        test_nru_rate_adapt_picks_highest_mcs_at_the_top_of_the_table,
+        test_nru_rate_adapt_required_sinr_db_tracks_last_measurement,
+        test_nru_rate_adapt_state_is_per_link,
+        # Rashed-Step 11.B-08-21-2026-end
     ]
     passed = 0
     failed = 0

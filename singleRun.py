@@ -158,6 +158,12 @@ def parse_traffic_class_mix(raw_values, label: str):
 # Rashed-Step 10.B-08-07-2026-start
 @click.option("--wifi-edca", "wifi_edca", is_flag=True, default=False, help="Enable real 802.11e EDCA differentiated channel access for Wi-Fi (per-AC voice/video/best_effort/background contention with independent CWmin/CWmax/AIFSN and virtual-collision resolution - see Project details/Step 10.txt's 10.B section). Wi-Fi only (NR-U is unaffected - no standardized EDCA-equivalent exists for unlicensed LBT). Default (unset/False) = legacy single-queue DCF contention, byte-identical to every pre-Step-10.B run. Currently requires --wifi-traffic-model=saturated (the default) - EDCA + poisson/cbr queueing is a deferred follow-up.")
 # Rashed-Step 10.B-08-07-2026-end
+# Rashed-Step 11.A-08-21-2026-start
+@click.option("--wifi-rate-adapt", "wifi_rate_adapt", is_flag=True, default=False, help="Enable dynamic per-STA MCS rate adaptation for Wi-Fi, ARF-style (Kamerman & Monteban 1997): step MCS up after 10 consecutive successes, down after 2 consecutive failures - no channel-state feedback, matches real legacy 802.11 hardware behavior. Default (unset/False) = -m/--mcs-value stays fixed for the whole run, byte-identical to every pre-Step-11 run.")
+# Rashed-Step 11.A-08-21-2026-end
+# Rashed-Step 11.B-08-21-2026-start
+@click.option("--nru-rate-adapt", "nru_rate_adapt", is_flag=True, default=False, help="Enable dynamic per-UE MCS rate adaptation for NR-U, CQI-style: pick the MCS whose required-SINR threshold best fits the most recently MEASURED link SINR (approximates 3GPP's UE-reported Channel Quality Indicator feedback - this simulator has no explicit CQI report message, so 'last measured SINR' stands in for it). Only affects the success/failure SINR threshold, NOT transmission duration (NR-U stays mcot-based - see --nru-mcs's own help). Default (unset/False) = --nru-mcs stays fixed for the whole run, byte-identical to every pre-Step-11 run.")
+# Rashed-Step 11.B-08-21-2026-end
 
 def single_run(
         runs: int,
@@ -238,6 +244,12 @@ def single_run(
         # Rashed-Step 10.B-08-07-2026-start
         wifi_edca: bool = False,
         # Rashed-Step 10.B-08-07-2026-end
+        # Rashed-Step 11.A-08-21-2026-start
+        wifi_rate_adapt: bool = False,
+        # Rashed-Step 11.A-08-21-2026-end
+        # Rashed-Step 11.B-08-21-2026-start
+        nru_rate_adapt: bool = False,
+        # Rashed-Step 11.B-08-21-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -313,6 +325,9 @@ def single_run(
                               # Rashed-Step 10.B-08-07-2026-start
                               qos_enabled=wifi_edca,
                               # Rashed-Step 10.B-08-07-2026-end
+                              # Rashed-Step 11.A-08-21-2026-start
+                              rate_adapt_enabled=wifi_rate_adapt,
+                              # Rashed-Step 11.A-08-21-2026-end
                               ),
                        Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync, min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot,
                                  # Rashed-Step 8.D-08-06-2026-start
@@ -326,8 +341,11 @@ def single_run(
                                  f_ghz=nru_freq_ghz * 1e9,
                                  # Rashed-Step 5.E-02-06-2026-end
                                  # Rashed-Step 5.F-02-06-2026-start
-                                 tx_power_dbm=nru_tx_power_dbm
+                                 tx_power_dbm=nru_tx_power_dbm,
                                  # Rashed-Step 5.F-02-06-2026-end
+                                 # Rashed-Step 11.B-08-21-2026-start
+                                 rate_adapt_enabled=nru_rate_adapt,
+                                 # Rashed-Step 11.B-08-21-2026-end
                                  ),
                        # Rashed-Step 5.C-02-06-2026-end
                        backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR, rogue_wifi,

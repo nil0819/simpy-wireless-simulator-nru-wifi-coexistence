@@ -98,6 +98,21 @@ class Config_NR:
     # Rashed-Step 5.D-02-06-2026-end
     # Rashed-Step 4.D_1-01-28-2026-end
 
+    # Rashed-Step 11.B-08-21-2026-start
+    # Dynamic rate adaptation (Step 11), CQI-style: pick the MCS whose
+    # required-SINR threshold best fits the most recently MEASURED
+    # link SINR - approximates real 3GPP UE-reported Channel Quality
+    # Indicator feedback (this simulator has no explicit CQI report
+    # message, so "last measured SINR" stands in for it). Unlike
+    # Wi-Fi's ARF (Config.rate_adapt_enabled), this is NOT a streak-
+    # counter/blind-fallback scheme - it directly uses the channel
+    # model's own SINR measurement, matching how a real gNB scheduler
+    # picks MCS from feedback rather than reacting after the fact.
+    # False (default) = config_nr.mcs is used exactly as before this
+    # step - zero behavior change. See "Project details/Step 11.txt".
+    rate_adapt_enabled: bool = False
+    # Rashed-Step 11.B-08-21-2026-end
+
     # Rashed-Step 5.C-02-06-2026-start
     # See wifi.Config's matching fields - same idea, drives the SINR noise
     # floor via common_phy.thermal_noise_dbm() instead of a hardcoded
@@ -171,6 +186,12 @@ class Gnb:
     ):
         self.config_nr = config_nr
         # self.times = Times(config.data_size, config.mcs)  # using Times script to get time calculations
+        # Rashed-Step 11.B-08-21-2026-start
+        # Per-UE rate-adaptation state (see Config_NR.rate_adapt_enabled).
+        # Keyed by UE name, lazily populated on first use - empty dict
+        # costs nothing when rate adaptation is disabled (the default).
+        self.link_rate_state: Dict[str, Dict[str, Optional[float]]] = {}
+        # Rashed-Step 11.B-08-21-2026-end
         self.name = name  # name of the station
         self.env = env  # simpy environment
         # color of output -- for future station distinction
@@ -688,6 +709,15 @@ class Gnb:
             log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config_nr.mcs}) = {required_sinr:.2f} dB")
             was_sent = (sinr >= required_sinr)
             # Rashed-Step 5.D-02-06-2026-end
+            # Rashed-Step 11.B-08-21-2026-start
+            # CQI-style feedback: record this transmission's measured
+            # SINR so the NEXT transmission to this same UE can pick a
+            # better-fitting MCS. No-op when rate adaptation is
+            # disabled. Deliberately uses the link_key computed BEFORE
+            # this transmission (self.transmission_to_send.rx_ue is
+            # unchanged throughout this method), not a re-derived one.
+            self.rate_adapt_record_result(self.rate_adapt_link_key(), sinr)
+            # Rashed-Step 11.B-08-21-2026-end
             if was_sent:
                 self.sent_completed()
             else:
@@ -872,15 +902,82 @@ class Gnb:
     # Rashed-Step 5.D-02-06-2026-start
     def required_sinr_db(self) -> float:
         """
-        Required SINR for this gNB's configured MCS, or the flat override
-        if config_nr.nru_sinr_thr_db_override is set. Shared by the
-        send_transmission() success decision and the sent_failed() log
-        line so they can't drift apart.
+        Required SINR for this gNB's current MCS (rate-adapted if
+        Config_NR.rate_adapt_enabled, else the fixed configured value),
+        or the flat override if config_nr.nru_sinr_thr_db_override is
+        set. Shared by the send_transmission() success decision and the
+        sent_failed() log line so they can't drift apart.
         """
         if self.config_nr.nru_sinr_thr_db_override is not None:
             return self.config_nr.nru_sinr_thr_db_override
-        return mcs_sinr_threshold_db(NRU_MCS_SINR_THRESHOLDS_DB, self.config_nr.mcs)
+        # Rashed-Step 11.B-08-21-2026-start
+        mcs = self.current_mcs_for_link(self.rate_adapt_link_key())
+        # Rashed-Step 11.B-08-21-2026-end
+        return mcs_sinr_threshold_db(NRU_MCS_SINR_THRESHOLDS_DB, mcs)
     # Rashed-Step 5.D-02-06-2026-end
+
+    # Rashed-Step 11.B-08-21-2026-start
+    def rate_adapt_link_key(self) -> Optional[str]:
+        """
+        Identifies which per-link rate-adaptation state to use - the UE
+        actually chosen for THIS transmission (self.transmission_to_
+        send.rx_ue, set by gen_new_transmission()'s random.choice(self.
+        ue_list) and re-read fresh at transmission time - see send_
+        transmission()'s own comment on why it's stored on the
+        Transmission_NR object rather than re-picked). None when
+        there's no pending transmission or it has no target UE.
+        """
+        tx = self.transmission_to_send
+        if tx is not None and tx.rx_ue is not None:
+            return tx.rx_ue.name
+        return None
+
+    def current_mcs_for_link(self, link_key: Optional[str]) -> int:
+        """
+        The MCS to use RIGHT NOW for `link_key`. Returns config_nr.mcs
+        unchanged when rate adaptation is disabled, link_key is None,
+        or this link has no SINR measurement yet (first transmission -
+        there's nothing to base a CQI-style pick on) - so "adaptation
+        off" and "adaptation on, before any feedback" both behave
+        exactly like today.
+        """
+        if not self.config_nr.rate_adapt_enabled or link_key is None:
+            return self.config_nr.mcs
+        state = self.link_rate_state.get(link_key)
+        if state is None or state.get("last_sinr_db") is None:
+            return self.config_nr.mcs
+        return self._select_mcs_for_sinr(state["last_sinr_db"])
+
+    @staticmethod
+    def _select_mcs_for_sinr(sinr_db: float) -> int:
+        """
+        CQI-style direct selection: the HIGHEST mcs in NRU_MCS_SINR_
+        THRESHOLDS_DB whose required threshold is <= sinr_db (the best
+        rate this link can currently sustain). Falls back to the
+        table's lowest mcs if even that isn't met (most robust rate
+        available, same "don't crash on a bad link" spirit as mcs_
+        sinr_threshold_db()'s own clamping behavior).
+        """
+        candidates = [mcs for mcs, thr in NRU_MCS_SINR_THRESHOLDS_DB.items() if thr <= sinr_db]
+        if not candidates:
+            return min(NRU_MCS_SINR_THRESHOLDS_DB.keys())
+        return max(candidates)
+
+    def rate_adapt_record_result(self, link_key: Optional[str], measured_sinr_db: float) -> None:
+        """
+        CQI-style feedback: call once per completed transmission
+        attempt with the SINR that was actually measured for it -
+        regardless of success/failure (CQI reflects channel quality,
+        not a success/failure outcome; even a FAILED transmission's
+        SINR is real information about the link). No-op when rate
+        adaptation is disabled or link_key is None (keeps link_rate_
+        state empty in that case - see current_mcs_for_link()).
+        """
+        if not self.config_nr.rate_adapt_enabled or link_key is None:
+            return
+        state = self.link_rate_state.setdefault(link_key, {"last_sinr_db": None})
+        state["last_sinr_db"] = measured_sinr_db
+    # Rashed-Step 11.B-08-21-2026-end
 
     def sent_failed(self):
         # Rashed-Step 2.D_4-02-03-2026-start
