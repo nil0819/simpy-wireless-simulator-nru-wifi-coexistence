@@ -113,6 +113,21 @@ class Config_NR:
     rate_adapt_enabled: bool = False
     # Rashed-Step 11.B-08-21-2026-end
 
+    # Rashed-Step 13.D-08-23-2026-start
+    # Optional injected predictor (duck-typed: exposes .lag_k and
+    # .predict_next(history) -> float - see ml/predictor.py's
+    # SinrPredictor) for using a trained model's predicted NEXT SINR
+    # instead of the raw last-measured value in current_mcs_for_link().
+    # None (default) = every pre-Step-13.D behavior is completely
+    # unchanged - only rate_adapt_enabled matters, same as before this
+    # step. Typed Any (not a concrete class) specifically so nru.py
+    # never has to import ml/ or sklearn/joblib itself - only the CLI
+    # wiring that actually constructs a SinrPredictor does (Step 13.txt
+    # design decision 6: ML code stays outside the simulator core).
+    # Only meaningful when rate_adapt_enabled is also True.
+    sinr_predictor: Any = None
+    # Rashed-Step 13.D-08-23-2026-end
+
     # Rashed-Step 5.C-02-06-2026-start
     # See wifi.Config's matching fields - same idea, drives the SINR noise
     # floor via common_phy.thermal_noise_dbm() instead of a hardcoded
@@ -945,12 +960,31 @@ class Gnb:
         there's nothing to base a CQI-style pick on) - so "adaptation
         off" and "adaptation on, before any feedback" both behave
         exactly like today.
+
+        Rashed-Step 13.D: when config_nr.sinr_predictor is set AND this
+        link already has at least predictor.lag_k measurements, the
+        MCS pick is based on the predictor's PREDICTED next SINR
+        instead of the raw last-measured value - everything else
+        (predictor unset, or not enough history yet) falls back to the
+        exact pre-13.D behavior unchanged. See ml/predictor.py's module
+        docstring / "Project details/Step 13.txt" for why this is NOT
+        assumed to be an improvement going in - Step 13.C's own
+        evaluation found this same model didn't beat plain "last
+        observed" on MAE.
         """
         if not self.config_nr.rate_adapt_enabled or link_key is None:
             return self.config_nr.mcs
         state = self.link_rate_state.get(link_key)
         if state is None or state.get("last_sinr_db") is None:
             return self.config_nr.mcs
+        # Rashed-Step 13.D-08-23-2026-start
+        predictor = self.config_nr.sinr_predictor
+        if predictor is not None:
+            history = state.get("sinr_history", [])
+            if len(history) >= predictor.lag_k:
+                predicted = predictor.predict_next(history, technology_is_wifi=0)
+                return self._select_mcs_for_sinr(predicted)
+        # Rashed-Step 13.D-08-23-2026-end
         return self._select_mcs_for_sinr(state["last_sinr_db"])
 
     @staticmethod
@@ -982,6 +1016,17 @@ class Gnb:
             return
         state = self.link_rate_state.setdefault(link_key, {"last_sinr_db": None})
         state["last_sinr_db"] = measured_sinr_db
+        # Rashed-Step 13.D-08-23-2026-start
+        # Short rolling history (oldest first, capped) - only actually
+        # consulted when config_nr.sinr_predictor is set (see
+        # current_mcs_for_link()); harmless extra bookkeeping otherwise.
+        # Capped at 8 - comfortably more than any reasonable predictor's
+        # lag_k (ml/train_sinr_model.LAG_K is 3 as of this writing)
+        # without growing unbounded over a long run.
+        history = state.setdefault("sinr_history", [])
+        history.append(measured_sinr_db)
+        del history[:-8]
+        # Rashed-Step 13.D-08-23-2026-end
     # Rashed-Step 11.B-08-21-2026-end
 
     def sent_failed(self):

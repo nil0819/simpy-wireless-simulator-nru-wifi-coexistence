@@ -144,6 +144,14 @@ Step 13.C: trains a lag-3 persistence baseline and a gradient-boosting model (sc
 python ml/train_sinr_model.py
 ```
 
+### ML-driven NR-U rate adaptation (`ml/predictor.py`, Step 13.D)
+
+Opt-in flag `--nru-rate-adapt-ml-model <path>` (requires `--nru-rate-adapt` also set) swaps NR-U's CQI-style MCS pick from "last measured SINR" to a Step 13.C model's *predicted* next SINR, once a link has enough history. Demonstrates the simulator is easy to extend with an ML-in-the-loop pathway (zero cost when the flag is unused - `ml/predictor.py`'s sklearn/pandas imports are lazy). Honest result: in the one scenario with a real difference, the plain heuristic still beat the model-driven version on packet delivery ratio (96.9% vs 89.3%) - consistent with 13.C's finding that the model doesn't beat persistence on MAE. See `Project details/Step 13.txt` for the full comparison.
+
+```bash
+python singleRun.py --nru-rate-adapt --nru-rate-adapt-ml-model ml/data/sinr_model.joblib -t 0.1
+```
+
 ## Testing
 
 Assert-based regression suite (no print-and-eyeball scripts for anything added since Step 5.H) - covers PHY primitives, the packet system, `GenericWirelessDevice`, and `PacketAttacker`:
@@ -151,7 +159,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-182 tests passing as of Step 13.A. Individual files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+188 tests passing as of Step 13.D. Individual files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -170,6 +178,9 @@ pytest test/
 ----> Step pre_11 (A-E) — analytical validation `model/` package (Bianchi DCF + CAD-paper DTMC, plus a w=1..6 sweep harness), console-output cleanup (packet stats moved to `packet.log`), repo hygiene pass
 ----> Step 11 — dynamic per-link MCS rate adaptation: `--wifi-rate-adapt` (ARF - Auto Rate Fallback, Kamerman & Monteban 1997: blind consecutive-success/failure counters, matching real legacy 802.11 hardware), `--nru-rate-adapt` (CQI-style - picks the MCS that best fits the most recently measured link SINR, approximating 3GPP UE-reported Channel Quality Indicator feedback). Both opt-in, both default off (byte-identical to every pre-Step-11 run)
 ----> Step 13.A — per-packet channel-quality logging: `Packet.measured_sinr_db`, populated at every WiFi/NR-U transmission attempt (success AND failure alike), exported as a new trailing `measured_sinr_db` column in the packet-level CSV. Prerequisite for the SINR/channel-quality prediction work (see `Project details/Step 13.txt`) - a first step toward an IEEE CCNC 2027 submission demonstrating the simulator's extensibility as open-source software for wireless networking research
+----> Step 13.B — documented 24-scenario SINR dataset generation (`ml/generate_sinr_dataset.py`), one timestamped packet CSV per scenario, non-destructive
+----> Step 13.C — persistence baseline + gradient-boosting SINR predictor (`ml/train_sinr_model.py`), split by scenario not row; honest result: model doesn't beat persistence on MAE for variable links (does on RMSE)
+----> Step 13.D — closes the loop: opt-in `--nru-rate-adapt-ml-model` flag drives NR-U rate adaptation from the Step 13.C model's predictions instead of raw last-measured SINR (`ml/predictor.py`). Honest result: the plain heuristic still wins on packet delivery ratio in the one scenario tested with real divergence, consistent with 13.C - 13.D's value is the demonstrated extensibility, not an outcome improvement
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 

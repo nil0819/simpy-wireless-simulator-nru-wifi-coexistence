@@ -1292,11 +1292,12 @@ accordingly. See "Project details/Step 11.txt" for the full design.
 """
 
 
-def _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True):
+def _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True, sinr_predictor=None):
     """Same minimal-construction pattern as _make_test_gnb() above, but
     with a caller-supplied Config_NR so tests can control mcs/rate_
-    adapt_enabled, and a transmission_to_send already set with a real
-    rx_ue - required_sinr_db()/rate_adapt_link_key() both read that."""
+    adapt_enabled/sinr_predictor (Step 13.D), and a transmission_to_send
+    already set with a real rx_ue - required_sinr_db()/rate_adapt_
+    link_key() both read that."""
     env = simpy.Environment()
     channel = Channel(
         tx_queue=simpy.PriorityResource(env, capacity=1),
@@ -1317,7 +1318,12 @@ def _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True):
         def current_pos(self):
             return (1.0, 0.0)
 
-    cfg = Config_NR(16, 9, 1000, 1000, 1000, 9, 15, 63, 6, mcs=mcs, rate_adapt_enabled=rate_adapt_enabled)
+    cfg = Config_NR(
+        16, 9, 1000, 1000, 1000, 9, 15, 63, 6, mcs=mcs, rate_adapt_enabled=rate_adapt_enabled,
+        # Rashed-Step 13.D-08-23-2026-start
+        sinr_predictor=sinr_predictor,
+        # Rashed-Step 13.D-08-23-2026-end
+    )
     g = Gnb(env, "Gnb 1", channel, (0.0, 0.0), [_FakeUe()], cfg)
     g.transmission_to_send = Transmission_NR(
         transmission_time=6000, gnb_name="Gnb 1", col="", t_start=0,
@@ -1551,6 +1557,109 @@ def test_nru_send_transmission_records_measured_sinr_on_failure():
 # Rashed-Step 13.A-08-23-2026-end
 
 
+# Rashed-Step 13.D-08-23-2026-start
+"""
+Step 13.D unit tests: Config_NR.sinr_predictor - the injected-predictor
+hook that lets NR-U's CQI-style rate adaptation (Step 11.B) use a
+trained model's PREDICTED next SINR instead of the raw last-measured
+value, once a link has enough history. Uses a small fake predictor
+(NOT a real sklearn model) so these tests stay fast/deterministic and
+don't require ml/data/sinr_model.joblib to exist - see ml/predictor.py
+for the real SinrPredictor wrapper these tests stand in for, and
+"Project details/Step 13.txt" for why 13.C's own result means this
+predictor is NOT assumed to be an improvement.
+"""
+
+
+class _FakePredictor:
+    """Records every call it receives (for assertions on what history
+    Gnb actually passed in) and always returns a fixed prediction,
+    regardless of the real last-measured SINR - this is exactly the
+    point: these tests can tell whether current_mcs_for_link() used
+    the PREDICTED value or fell back to the raw last-measured one,
+    because the two are deliberately set to disagree in every test
+    below."""
+    def __init__(self, lag_k=3, fixed_prediction=100.0):
+        self.lag_k = lag_k
+        self.fixed_prediction = fixed_prediction
+        self.calls = []
+
+    def predict_next(self, history, technology_is_wifi=0):
+        self.calls.append((list(history), technology_is_wifi))
+        return self.fixed_prediction
+
+
+def test_nru_predictor_unset_leaves_pre_13d_behavior_unchanged():
+    # Regression guard: sinr_predictor=None (the default) must behave
+    # exactly like Step 11.B, including still building up sinr_history
+    # bookkeeping (harmless, just never consulted).
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True, sinr_predictor=None)
+    key = g.rate_adapt_link_key()
+    g.rate_adapt_record_result(key, measured_sinr_db=20.0)
+    assert g.current_mcs_for_link(key) == 5, "unchanged from Step 11.B: mcs from the raw last-measured SINR"
+    assert g.link_rate_state[key]["sinr_history"] == [20.0]
+
+
+def test_nru_predictor_not_enough_history_falls_back_to_last_measured():
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)  # would pick mcs=7 if used
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True, sinr_predictor=fake)
+    key = g.rate_adapt_link_key()
+    g.rate_adapt_record_result(key, measured_sinr_db=20.0)  # only 1 measurement, lag_k=3
+    assert g.current_mcs_for_link(key) == 5, "not enough history yet - must fall back, not call the predictor"
+    assert fake.calls == [], "predictor must not be invoked before there's enough history"
+
+
+def test_nru_predictor_used_once_enough_history():
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)  # -> mcs=7
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True, sinr_predictor=fake)
+    key = g.rate_adapt_link_key()
+    # 3 measurements, deliberately at a SINR (6.0 -> mcs=0) that would
+    # give a completely different answer than the predictor's fixed
+    # 100.0 (-> mcs=7) if the predictor weren't actually being used.
+    for _ in range(3):
+        g.rate_adapt_record_result(key, measured_sinr_db=6.0)
+    assert g.current_mcs_for_link(key) == 7, "must use the PREDICTED value (100.0), not the last-measured one (6.0)"
+    assert len(fake.calls) == 1
+    history_passed, technology_is_wifi = fake.calls[0]
+    assert history_passed == [6.0, 6.0, 6.0]
+    assert technology_is_wifi == 0, "NR-U's own use site must always pass technology_is_wifi=0"
+
+
+def test_nru_predictor_history_passed_oldest_first():
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True, sinr_predictor=fake)
+    key = g.rate_adapt_link_key()
+    for sinr in (10.0, 20.0, 30.0):
+        g.rate_adapt_record_result(key, measured_sinr_db=sinr)
+    g.current_mcs_for_link(key)
+    history_passed, _ = fake.calls[0]
+    assert history_passed == [10.0, 20.0, 30.0], \
+        "history must be oldest-first (matches ml/predictor.py's SinrPredictor.predict_next() contract)"
+
+
+def test_nru_predictor_history_capped_at_8():
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True, sinr_predictor=fake)
+    key = g.rate_adapt_link_key()
+    for i in range(10):
+        g.rate_adapt_record_result(key, measured_sinr_db=float(i))
+    assert g.link_rate_state[key]["sinr_history"] == [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], \
+        "capped at 8 most-recent entries, oldest ones dropped"
+
+
+def test_nru_predictor_disabled_rate_adapt_ignores_predictor_entirely():
+    # A predictor set but rate_adapt_enabled=False must be a complete
+    # no-op, same as every other rate-adapt-disabled regression guard.
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)
+    g = _make_test_rate_adapt_gnb(mcs=3, rate_adapt_enabled=False, sinr_predictor=fake)
+    key = g.rate_adapt_link_key()
+    g.rate_adapt_record_result(key, measured_sinr_db=6.0)
+    assert g.current_mcs_for_link(key) == 3
+    assert fake.calls == []
+    assert g.link_rate_state == {}
+# Rashed-Step 13.D-08-23-2026-end
+
+
 # Rashed-Step 8.A-08-06-2026-start
 if __name__ == "__main__":
     tests = [
@@ -1661,6 +1770,14 @@ if __name__ == "__main__":
         test_nru_send_transmission_records_measured_sinr_on_success,
         test_nru_send_transmission_records_measured_sinr_on_failure,
         # Rashed-Step 13.A-08-23-2026-end
+        # Rashed-Step 13.D-08-23-2026-start
+        test_nru_predictor_unset_leaves_pre_13d_behavior_unchanged,
+        test_nru_predictor_not_enough_history_falls_back_to_last_measured,
+        test_nru_predictor_used_once_enough_history,
+        test_nru_predictor_history_passed_oldest_first,
+        test_nru_predictor_history_capped_at_8,
+        test_nru_predictor_disabled_rate_adapt_ignores_predictor_entirely,
+        # Rashed-Step 13.D-08-23-2026-end
     ]
     passed = 0
     failed = 0

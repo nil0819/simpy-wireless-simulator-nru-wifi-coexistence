@@ -164,6 +164,9 @@ def parse_traffic_class_mix(raw_values, label: str):
 # Rashed-Step 11.B-08-21-2026-start
 @click.option("--nru-rate-adapt", "nru_rate_adapt", is_flag=True, default=False, help="Enable dynamic per-UE MCS rate adaptation for NR-U, CQI-style: pick the MCS whose required-SINR threshold best fits the most recently MEASURED link SINR (approximates 3GPP's UE-reported Channel Quality Indicator feedback - this simulator has no explicit CQI report message, so 'last measured SINR' stands in for it). Only affects the success/failure SINR threshold, NOT transmission duration (NR-U stays mcot-based - see --nru-mcs's own help). Default (unset/False) = --nru-mcs stays fixed for the whole run, byte-identical to every pre-Step-11 run.")
 # Rashed-Step 11.B-08-21-2026-end
+# Rashed-Step 13.D-08-23-2026-start
+@click.option("--nru-rate-adapt-ml-model", "nru_rate_adapt_ml_model", type=str, default=None, help="Path to a trained SINR-prediction model (ml/train_sinr_model.py's saved output, e.g. ml/data/sinr_model.joblib). When set, NR-U's CQI-style rate adaptation (--nru-rate-adapt, required alongside this flag) uses the model's PREDICTED next SINR instead of the raw last-measured value, once a link has enough history (ml/train_sinr_model.LAG_K measurements). Default (unset/None) = every pre-Step-13.D run's exact behavior. NOTE: Step 13.C's own evaluation found this model does not beat plain 'last observed' on MAE for held-out scenarios - this flag is provided to empirically test its effect on actual coexistence outcomes, not because it's known to help (see Project details/Step 13.txt's 13.D section).")
+# Rashed-Step 13.D-08-23-2026-end
 
 def single_run(
         runs: int,
@@ -250,6 +253,9 @@ def single_run(
         # Rashed-Step 11.B-08-21-2026-start
         nru_rate_adapt: bool = False,
         # Rashed-Step 11.B-08-21-2026-end
+        # Rashed-Step 13.D-08-23-2026-start
+        nru_rate_adapt_ml_model: str = None,
+        # Rashed-Step 13.D-08-23-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -287,6 +293,26 @@ def single_run(
             "Project details/Step 10.txt's 10.B NOT DONE list)."
         )
     # Rashed-Step 10.B-08-07-2026-end
+
+    # Rashed-Step 13.D-08-23-2026-start
+    # Same fail-fast-at-the-CLI convention as the --wifi-edca guard
+    # above, not a deep AttributeError inside nru.py.
+    if nru_rate_adapt_ml_model and not nru_rate_adapt:
+        raise click.BadParameter(
+            "--nru-rate-adapt-ml-model requires --nru-rate-adapt to also be "
+            "set (the model only replaces WHICH SINR value drives an "
+            "already-enabled CQI-style pick, it doesn't enable rate "
+            "adaptation on its own)."
+        )
+    nru_sinr_predictor = None
+    if nru_rate_adapt_ml_model:
+        # Imported here, not at module level - so running singleRun.py
+        # without this flag never requires sklearn/pandas/joblib to be
+        # installed (Step 13.txt design decision 6: ML code stays out
+        # of the simulator core's normal dependency footprint).
+        from ml.predictor import SinrPredictor
+        nru_sinr_predictor = SinrPredictor(nru_rate_adapt_ml_model)
+    # Rashed-Step 13.D-08-23-2026-end
 
     # Rashed-Step 8.B-08-06-2026-start
     # Rashed-Step 8.C-08-06-2026: added packet_size_bytes=... (defaults
@@ -346,6 +372,9 @@ def single_run(
                                  # Rashed-Step 11.B-08-21-2026-start
                                  rate_adapt_enabled=nru_rate_adapt,
                                  # Rashed-Step 11.B-08-21-2026-end
+                                 # Rashed-Step 13.D-08-23-2026-start
+                                 sinr_predictor=nru_sinr_predictor,
+                                 # Rashed-Step 13.D-08-23-2026-end
                                  ),
                        # Rashed-Step 5.C-02-06-2026-end
                        backoffs, airtime_data, airtime_control, airtime_data_NR, airtime_control_NR, rogue_wifi,
