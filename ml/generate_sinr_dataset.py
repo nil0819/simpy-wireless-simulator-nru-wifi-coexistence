@@ -2,11 +2,24 @@
 """
 Step 13.B: scenario sweep that generates the training dataset for the
 SINR/channel-quality prediction work (see "Project details/Step
-13.txt"). Runs many varied Wi-Fi+NR-U coexistence scenarios, all
-pointed at the SAME --export-packets-csv path, so
-common.packet.export_packets_csv()'s existing "write header once, then
-append" behavior (Step 9.D) accumulates every scenario's packets - each
-carrying its own measured_sinr_db (Step 13.A) - into one combined file.
+13.txt"). Runs many varied Wi-Fi+NR-U coexistence scenarios; EVERY
+scenario writes its own packet CSV, named from the timestamp it
+actually ran at (e.g. sinr_packets_20260823_231045_123456_seed20000.
+csv) - NOT one shared file that later scenarios append into. Rashed
+asked for this explicitly (per-simulation timestamped files instead of
+one accumulated CSV) after noticing how the original 13.B design
+worked; the manifest CSV records which file each scenario's packets
+landed in, so nothing about traceability is lost.
+
+Re-running this script is now NON-DESTRUCTIVE: every previous sweep's
+per-scenario files are left alone (their timestamps make them
+impossible to collide with), and the manifest is APPENDED to, not
+overwritten (same "write header once, then append" convention
+common.packet.export_packets_csv() already established, Step 9.D) -
+so results from different sweep sessions accumulate rather than
+replace each other. ml/train_sinr_model.py's loader globs every
+sinr_packets_*.csv under ml/data/ and concatenates them, so it picks
+up everything regardless of which session produced it.
 
 WHY model.runner.run_scenario() INSTEAD OF SHELLING OUT TO singleRun.py
 PER SCENARIO: measured directly in this session - a 1-simulated-second
@@ -27,23 +40,20 @@ interferer count) - see Step 13.txt design decision 3: the first model
 (13.C) is a pure lag-based/autoregressive predictor. What THIS script
 gives that model to generalize over is variation ACROSS scenarios
 (distance/shadowing/mobility/interferer-count all change between
-sweep points), not per-row context columns. A companion "manifest" CSV
-(one row per scenario, keyed by seed) records exactly what varied, so
-a later step (13.E) can join it back to the packet CSV by seed if
-richer per-scenario features are ever wanted - the packet CSV's "seed"
-column (Step 9.D) already makes that join possible with zero changes
-to the packet CSV format itself.
+sweep points), not per-row context columns. The manifest CSV (one row
+per scenario, keyed by seed AND by its own packets_csv filename)
+records exactly what varied, so a later step (13.E) can join it back
+to any scenario's packet file if richer per-scenario features are ever
+wanted.
 
 Run: `python3 ml/generate_sinr_dataset.py` from the repo root (or
 anywhere - paths below are resolved relative to this file, not cwd).
-Re-running DELETES and regenerates both output files from scratch
-(the point is a reproducible dataset from a fixed, documented grid,
-not an ever-growing accumulation across unrelated runs).
 """
 import csv
 import os
 import sys
 import time
+from datetime import datetime
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
@@ -52,8 +62,16 @@ if _REPO_ROOT not in sys.path:
 from model.runner import run_scenario  # noqa: E402
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-PACKETS_CSV_PATH = os.path.join(_DATA_DIR, "sinr_dataset_packets.csv")
 MANIFEST_CSV_PATH = os.path.join(_DATA_DIR, "sinr_dataset_manifest.csv")
+
+# Fixed column order for the (now append-across-sessions) manifest -
+# can't just infer it from dict key order per-run anymore, since that
+# has to stay IDENTICAL across every session that ever appends to it.
+MANIFEST_FIELDNAMES = [
+    "seed", "distance", "area_w", "area_h", "sta_radius", "ue_radius",
+    "shadowing_sigma_db", "mobility", "topology", "ap_number", "gnb_number",
+    "packets_csv", "wall_clock_s",
+]
 
 # Simulated seconds per scenario. A first pass at 0.3s (measured:
 # whole 24-scenario grid in 21.4s wall clock, 7250 total rows) was too
@@ -91,10 +109,13 @@ TOPOLOGY_LEVELS = [
     {"name": "heavy", "ap_number": 3, "gnb_number": 2},
 ]
 
-# Unique, clearly-out-of-the-way seed range so this sweep's rows can
+# Unique, clearly-out-of-the-way seed range so this sweep's seeds can
 # never collide with a seed used by some earlier/unrelated
-# --export-packets-csv run someone might append into the same file by
-# mistake.
+# --export-packets-csv run. Deliberately kept FIXED across sessions
+# (not re-randomized per run) so the same scenario definition always
+# maps to the same simulated seed - reruns are comparable to each
+# other, just written to their own new timestamped file rather than
+# overwriting the old one.
 SEED_BASE = 20000
 
 
@@ -127,7 +148,18 @@ def build_grid():
     return grid
 
 
-def scenario_argv(scenario: dict) -> list:
+def scenario_packets_csv_path(scenario: dict) -> str:
+    """One brand-new file per scenario, named from the timestamp it's
+    about to run at (microsecond precision, so two scenarios that
+    finish within the same wall-clock second - the "close"/"light"
+    ones often do - still can't collide) plus its seed, for a filename
+    that's traceable back to the manifest at a glance without opening
+    anything."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return os.path.join(_DATA_DIR, f"sinr_packets_{ts}_seed{scenario['seed']}.csv")
+
+
+def scenario_argv(scenario: dict, packets_csv_path: str) -> list:
     argv = [
         # -r/--runs defaults to 10 in singleRun.py - MUST be pinned to 1
         # here, or each "scenario" silently becomes 10 internal repeats
@@ -145,7 +177,7 @@ def scenario_argv(scenario: dict) -> list:
         "--sta-radius", str(scenario["sta_radius"]),
         "--ue-radius", str(scenario["ue_radius"]),
         "--shadowing-sigma-db", str(scenario["shadowing_sigma_db"]),
-        "--export-packets-csv", PACKETS_CSV_PATH,
+        "--export-packets-csv", packets_csv_path,
     ]
     if scenario["mobility"]:
         argv += [
@@ -155,43 +187,57 @@ def scenario_argv(scenario: dict) -> list:
     return argv
 
 
+def _append_manifest_rows(rows: list):
+    write_header = not os.path.exists(MANIFEST_CSV_PATH)
+    with open(MANIFEST_CSV_PATH, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=MANIFEST_FIELDNAMES)
+        if write_header:
+            writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
 def main():
     os.makedirs(_DATA_DIR, exist_ok=True)
-    for path in (PACKETS_CSV_PATH, MANIFEST_CSV_PATH):
-        if os.path.exists(path):
-            os.remove(path)
 
     grid = build_grid()
     print(f"Running {len(grid)} scenarios, {SIM_TIME_S}s simulated time each...")
+    print(f"(non-destructive - each scenario writes its own timestamped file under {_DATA_DIR})")
 
     manifest_rows = []
     t0 = time.time()
+    session_total_rows = 0
     for i, scenario in enumerate(grid, start=1):
+        packets_path = scenario_packets_csv_path(scenario)
         t_scenario = time.time()
-        run_scenario(scenario_argv(scenario))
+        run_scenario(scenario_argv(scenario, packets_path))
         elapsed = time.time() - t_scenario
-        manifest_rows.append({**scenario, "wall_clock_s": round(elapsed, 2)})
+
+        with open(packets_path) as f:
+            rows_this_scenario = sum(1 for _ in f) - 1  # minus header
+        session_total_rows += rows_this_scenario
+
+        manifest_rows.append({
+            **scenario,
+            "packets_csv": os.path.basename(packets_path),
+            "wall_clock_s": round(elapsed, 2),
+        })
         print(
             f"  [{i}/{len(grid)}] seed={scenario['seed']} "
             f"distance={scenario['distance']} shadowing={scenario['shadowing_sigma_db']} "
             f"mobility={scenario['mobility']} topology={scenario['topology']} "
-            f"-> {elapsed:.1f}s"
+            f"-> {elapsed:.1f}s, {rows_this_scenario} rows -> {os.path.basename(packets_path)}"
         )
 
-    with open(MANIFEST_CSV_PATH, "w", newline="") as f:
-        fieldnames = list(manifest_rows[0].keys())
-        writer = csv.writer(f)
-        writer.writerow(fieldnames)
-        for row in manifest_rows:
-            writer.writerow([row[k] for k in fieldnames])
+    _append_manifest_rows(manifest_rows)
 
     total_elapsed = time.time() - t0
-    with open(PACKETS_CSV_PATH) as f:
-        total_rows = sum(1 for _ in f) - 1  # minus header
+    all_packet_files = [f for f in os.listdir(_DATA_DIR) if f.startswith("sinr_packets_")]
 
     print(f"\nDone in {total_elapsed:.1f}s wall clock.")
-    print(f"{len(grid)} scenarios -> {total_rows} packet rows in {PACKETS_CSV_PATH}")
-    print(f"Manifest ({len(grid)} rows) written to {MANIFEST_CSV_PATH}")
+    print(f"This session: {len(grid)} scenarios -> {session_total_rows} packet rows across {len(grid)} new files")
+    print(f"Manifest ({len(manifest_rows)} new rows appended) at {MANIFEST_CSV_PATH}")
+    print(f"ml/data/ now has {len(all_packet_files)} sinr_packets_*.csv files total (across all sessions ever run)")
 
 
 if __name__ == "__main__":

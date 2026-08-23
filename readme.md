@@ -130,10 +130,18 @@ python singleRunAttacker.py --ap-number 2 --gnb-number 1 -t 0.1 --spoof-target "
 
 ### SINR/channel-quality dataset generation (`ml/generate_sinr_dataset.py`)
 
-Step 13.B: runs a documented grid of Wi-Fi + NR-U coexistence scenarios (varying distance, shadowing, mobility, interferer count) and combines their per-packet `measured_sinr_db` (Step 13.A) into one training CSV, plus a scenario manifest - the data prerequisite for the SINR-prediction work in `Project details/Step 13.txt`. Output goes to `ml/data/` (gitignored, regenerate by re-running the script).
+Step 13.B: runs a documented grid of Wi-Fi + NR-U coexistence scenarios (varying distance, shadowing, mobility, interferer count) - the data prerequisite for the SINR-prediction work in `Project details/Step 13.txt`. Each scenario writes its own timestamped packet CSV (non-destructive - rerunning never overwrites a prior sweep's files) plus an appended row in a shared manifest. Output goes to `ml/data/` (gitignored, regenerate by re-running the script).
 
 ```bash
 python ml/generate_sinr_dataset.py
+```
+
+### SINR prediction: baseline + model (`ml/train_sinr_model.py`)
+
+Step 13.C: trains a lag-3 persistence baseline and a gradient-boosting model (scikit-learn) on the Step 13.B dataset, split by scenario (not row) so results reflect genuine generalization to unseen scenarios. Reports metrics separately for links with real SINR variation vs. links that are mathematically constant (static, unshadowed, non-interfered links - not a bug, see the script's docstring) so a trivial case can't inflate the headline number. Current honest result: the model does not beat the persistence baseline on MAE for held-out scenarios (though it does on RMSE) - see `Project details/Step 13.txt` for the full writeup and why this motivates richer per-packet features next.
+
+```bash
+python ml/train_sinr_model.py
 ```
 
 ## Testing
