@@ -48,6 +48,9 @@ from nru.nru import Gnb, Config_NR
 from nru.ue import NrUE
 from generic.generic_device import Config_Generic
 from generic.generic_transmitter import GenericTransmitter
+# Rashed-Step 13.E.2-08-23-2026-start
+from common.packet import export_packets_csv
+# Rashed-Step 13.E.2-08-23-2026-end
 
 
 def rand_pos_near(center: Pos, radius: float) -> Pos:
@@ -82,6 +85,9 @@ def run_simulation_generic(
         generic_mobility_speed_mps: float = 0.0,
         mobility_pause_s: float = 0.0,
         shadowing_sigma_db: float = 0.0,
+        # Rashed-Step 13.E.2-08-23-2026-start
+        export_packets_csv_path: Optional[str] = None,
+        # Rashed-Step 13.E.2-08-23-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -192,6 +198,24 @@ def run_simulation_generic(
     fail_nru = sum(g.failed_transmissions for g in gnbs)
     print(f"WiFi succ={succ_wifi} fail={fail_wifi}")
     print(f"NRU  succ={succ_nru} fail={fail_nru}")
+
+    # Rashed-Step 13.E.2-08-23-2026-start
+    # Opt-in packet-level CSV export, same "write header once, append"
+    # behavior and same technology-agnostic export_packets_csv() as
+    # singleRun.py's --export-packets-csv (Step 9.D) - generic devices'
+    # packet_log (Step 9.B) already carries real Packet objects, and
+    # measured_sinr_db (Step 13.E.2) is now populated on each one at
+    # transmit()-completion time, so this reuses the exact same export
+    # path rather than a separate generic-only CSV format. Keyed under
+    # generic_config.tech_label (default "GENERIC") - a completely
+    # separate technology bucket from "WiFi"/"NRU" in the exported CSV,
+    # never mixed with those rows even though it's the same file/format.
+    if export_packets_csv_path and generic_devices:
+        export_packets_csv(
+            export_packets_csv_path, seed,
+            {generic_config.tech_label: {dev.name: dev.packet_log for dev in generic_devices}},
+        )
+    # Rashed-Step 13.E.2-08-23-2026-end
 
     return generic_devices
 # Rashed-Step 11.A-08-12-2026-end

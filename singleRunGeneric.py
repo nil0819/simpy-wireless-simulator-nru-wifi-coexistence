@@ -51,6 +51,9 @@ from simulation_nr import parse_pos_list_nr as parse_pos_list  # reused verbatim
 @click.option("--shadowing-sigma-db", "shadowing_sigma_db", type=float, default=0.0, help="Log-normal shadow fading std dev in dB (0 = disabled/deterministic)")
 @click.option("--wifi-tx-power-dbm", "wifi_tx_power_dbm", type=float, default=20.0, help="Wi-Fi tx power (dBm)")
 @click.option("--nru-tx-power-dbm", "nru_tx_power_dbm", type=float, default=23.0, help="NR-U tx power (dBm)")
+# Rashed-Step 13.E.2-08-23-2026-start
+@click.option("--export-packets-csv", "export_packets_csv_path", type=str, default=None, help="Path to write a packet-level CSV of every GenericTransmitter transmission (technology-agnostic format, same as singleRun.py's --export-packets-csv, Step 9.D/13.E.2) - includes each packet's measured_sinr_db (Step 13.E.2). Default (unset) = no CSV, byte-identical to every pre-13.E.2 run.")
+# Rashed-Step 13.E.2-08-23-2026-end
 def single_run_generic(
         runs, seed, ap_number, gnb_number, generic_number, simulation_time,
         area_w, area_h, ap_pos, gnb_pos, generic_pos,
@@ -61,6 +64,9 @@ def single_run_generic(
         generic_mobility_speed_mps, mobility_pause_s,
         wifi_cw_min, wifi_cw_max, nru_cw_min, nru_cw_max, mcot, synchronization_slot_duration,
         shadowing_sigma_db, wifi_tx_power_dbm, nru_tx_power_dbm,
+        # Rashed-Step 13.E.2-08-23-2026-start
+        export_packets_csv_path=None,
+        # Rashed-Step 13.E.2-08-23-2026-end
 ):
     ap_positions = parse_pos_list(ap_pos, "--ap-pos") if ap_pos else None
     gnb_positions = parse_pos_list(gnb_pos, "--gnb-pos") if gnb_pos else None
@@ -95,6 +101,9 @@ def single_run_generic(
             generic_mobility_speed_mps=generic_mobility_speed_mps,
             mobility_pause_s=mobility_pause_s,
             shadowing_sigma_db=shadowing_sigma_db,
+            # Rashed-Step 13.E.2-08-23-2026-start
+            export_packets_csv_path=export_packets_csv_path,
+            # Rashed-Step 13.E.2-08-23-2026-end
         )
 
 

@@ -1132,9 +1132,11 @@ Step 11.txt" for the full design.
 """
 
 
-def _make_test_rate_adapt_wifi(mcs=7, rate_adapt_enabled=True, up_streak=10, down_streak=2):
+def _make_test_rate_adapt_wifi(mcs=7, rate_adapt_enabled=True, up_streak=10, down_streak=2, sinr_predictor=None):
     """Same minimal-construction pattern as _make_test_wifi() above, but
-    with a caller-supplied Config so tests can control mcs/rate_adapt_*."""
+    with a caller-supplied Config so tests can control mcs/rate_adapt_*.
+    sinr_predictor param added Step 13.E.1 (mirrors nru.py's test
+    helper's sinr_predictor param from Step 13.D)."""
     env = simpy.Environment()
     channel = Channel(
         tx_queue=simpy.PriorityResource(env, capacity=1),
@@ -1158,6 +1160,9 @@ def _make_test_rate_adapt_wifi(mcs=7, rate_adapt_enabled=True, up_streak=10, dow
     cfg = Config(
         mcs=mcs, rate_adapt_enabled=rate_adapt_enabled,
         rate_adapt_up_streak=up_streak, rate_adapt_down_streak=down_streak,
+        # Rashed-Step 13.E.1-08-23-2026-start
+        sinr_predictor=sinr_predictor,
+        # Rashed-Step 13.E.1-08-23-2026-end
     )
     ap = WiFi(env, "AP 1", channel, (0.0, 0.0), [_FakeSta()], cfg)
     return ap
@@ -1613,16 +1618,34 @@ def test_nru_predictor_used_once_enough_history():
     fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)  # -> mcs=7
     g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True, sinr_predictor=fake)
     key = g.rate_adapt_link_key()
-    # 3 measurements, deliberately at a SINR (6.0 -> mcs=0) that would
-    # give a completely different answer than the predictor's fixed
-    # 100.0 (-> mcs=7) if the predictor weren't actually being used.
-    for _ in range(3):
-        g.rate_adapt_record_result(key, measured_sinr_db=6.0)
-    assert g.current_mcs_for_link(key) == 7, "must use the PREDICTED value (100.0), not the last-measured one (6.0)"
+    # 3 DIFFERENT measurements (NOT constant - see the fix's own guard
+    # test below for the constant case) at SINRs (6.0/6.5/7.0 -> mcs=1)
+    # that would give a completely different answer than the
+    # predictor's fixed 100.0 (-> mcs=7) if the predictor weren't
+    # actually being used.
+    for sinr in (6.0, 6.5, 7.0):
+        g.rate_adapt_record_result(key, measured_sinr_db=sinr)
+    assert g.current_mcs_for_link(key) == 7, "must use the PREDICTED value (100.0), not the last-measured one (7.0)"
     assert len(fake.calls) == 1
     history_passed, technology_is_wifi = fake.calls[0]
-    assert history_passed == [6.0, 6.0, 6.0]
+    assert history_passed == [6.0, 6.5, 7.0]
     assert technology_is_wifi == 0, "NR-U's own use site must always pass technology_is_wifi=0"
+
+
+def test_nru_predictor_skipped_when_history_is_exactly_constant():
+    # Rashed-Step 13.D-fix: investigated a real empirical collapse
+    # (see current_mcs_for_link()'s docstring) - a constant-SINR link
+    # (genuinely static, no mobility/shadowing change) must fall back
+    # to the last-measured value (persistence, exactly correct there by
+    # construction) instead of trusting the predictor, which has no way
+    # to self-correct a bad prediction from a constant history.
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)  # would pick mcs=7 if used
+    g = _make_test_rate_adapt_gnb(mcs=4, rate_adapt_enabled=True, sinr_predictor=fake)
+    key = g.rate_adapt_link_key()
+    for _ in range(3):
+        g.rate_adapt_record_result(key, measured_sinr_db=6.0)  # exactly constant
+    assert g.current_mcs_for_link(key) == 0, "must fall back to the last-measured SINR (6.0 -> mcs=0), predictor skipped"
+    assert fake.calls == [], "predictor must not even be called for a constant history"
 
 
 def test_nru_predictor_history_passed_oldest_first():
@@ -1658,6 +1681,116 @@ def test_nru_predictor_disabled_rate_adapt_ignores_predictor_entirely():
     assert fake.calls == []
     assert g.link_rate_state == {}
 # Rashed-Step 13.D-08-23-2026-end
+
+
+# Rashed-Step 13.E.1-08-23-2026-start
+"""
+Step 13.E.1 unit tests: Config.sinr_predictor - the same injected-
+predictor hook as Step 13.D, mirrored onto Wi-Fi's ARF (Step 11.A).
+Unlike NR-U's CQI-style scheme (already SINR-value-driven before 13.D
+existed), ARF is streak-driven - so when a predictor IS active and has
+enough history, current_mcs_for_link() switches this link to a direct
+CQI-style pick from WIFI_MCS_SINR_THRESHOLDS_DB on the PREDICTED SINR,
+BYPASSING the streak-based state["mcs"] entirely, rather than blending
+the two. These tests use up_streak=10 (the default) with only a
+handful of recorded successes, so the streak-based mcs never actually
+changes on its own within a test - any test asserting an mcs different
+from the initial config.mcs necessarily proves the predictor path was
+used, not a coincidental streak promotion. Same fake-predictor pattern
+as the NR-U 13.D tests above - see that section's docstring.
+"""
+
+
+def test_wifi_predictor_unset_leaves_pre_13e1_behavior_unchanged():
+    # Regression guard: sinr_predictor=None (the default) must behave
+    # exactly like Step 11.A's ARF, including still building up sinr_
+    # history bookkeeping (harmless, just never consulted).
+    ap = _make_test_rate_adapt_wifi(mcs=4, rate_adapt_enabled=True, sinr_predictor=None)
+    key = ap.rate_adapt_link_key()
+    ap.rate_adapt_record_result(key, success=True, measured_sinr_db=20.0)
+    assert ap.current_mcs_for_link(key) == 4, "unchanged from Step 11.A: 1 success is nowhere near up_streak=10"
+    assert ap.link_rate_state[key]["sinr_history"] == [20.0]
+
+
+def test_wifi_predictor_not_enough_history_falls_back_to_arf_mcs():
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)  # would pick mcs=7 if used
+    ap = _make_test_rate_adapt_wifi(mcs=4, rate_adapt_enabled=True, sinr_predictor=fake)
+    key = ap.rate_adapt_link_key()
+    ap.rate_adapt_record_result(key, success=True, measured_sinr_db=20.0)  # only 1 measurement, lag_k=3
+    assert ap.current_mcs_for_link(key) == 4, "not enough history yet - must fall back to ARF's mcs, not call the predictor"
+    assert fake.calls == [], "predictor must not be invoked before there's enough history"
+
+
+def test_wifi_predictor_used_once_enough_history():
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)  # -> mcs=7
+    ap = _make_test_rate_adapt_wifi(mcs=4, rate_adapt_enabled=True, sinr_predictor=fake)
+    key = ap.rate_adapt_link_key()
+    # 3 successes, deliberately far below up_streak=10 so ARF's own
+    # state["mcs"] never leaves 4 on its own - proves the predictor's
+    # fixed 100.0 (-> mcs=7) is what actually drove the answer, not a
+    # coincidental streak promotion. DIFFERENT SINR each time (NOT
+    # constant - see the fix's own guard test below for the constant
+    # case) so this test exercises the "genuinely used" path, not the
+    # constant-link fallback.
+    for sinr in (6.0, 6.5, 7.0):
+        ap.rate_adapt_record_result(key, success=True, measured_sinr_db=sinr)
+    assert ap.current_mcs_for_link(key) == 7, "must use the PREDICTED value (100.0), not ARF's streak-based mcs (4)"
+    assert len(fake.calls) == 1
+    history_passed, technology_is_wifi = fake.calls[0]
+    assert history_passed == [6.0, 6.5, 7.0]
+    assert technology_is_wifi == 1, "WiFi's own use site must always pass technology_is_wifi=1"
+
+
+def test_wifi_predictor_skipped_when_history_is_exactly_constant():
+    # Rashed-Step 13.E.1-fix: investigated a real empirical collapse
+    # (see current_mcs_for_link()'s docstring / nru.py's equivalent
+    # fix) - a constant-SINR link must fall back to ARF's own streak-
+    # based mcs (which itself derives from the last-measured value,
+    # exactly correct on a constant link) instead of trusting the
+    # predictor, which has no way to self-correct a bad prediction from
+    # a constant history.
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)  # would pick mcs=7 if used
+    ap = _make_test_rate_adapt_wifi(mcs=4, rate_adapt_enabled=True, sinr_predictor=fake)
+    key = ap.rate_adapt_link_key()
+    for _ in range(3):
+        ap.rate_adapt_record_result(key, success=True, measured_sinr_db=6.0)  # exactly constant
+    assert ap.current_mcs_for_link(key) == 4, "must fall back to ARF's streak-based mcs (unchanged at 4), predictor skipped"
+    assert fake.calls == [], "predictor must not even be called for a constant history"
+
+
+def test_wifi_predictor_history_passed_oldest_first():
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)
+    ap = _make_test_rate_adapt_wifi(mcs=4, rate_adapt_enabled=True, sinr_predictor=fake)
+    key = ap.rate_adapt_link_key()
+    for sinr in (10.0, 20.0, 30.0):
+        ap.rate_adapt_record_result(key, success=True, measured_sinr_db=sinr)
+    ap.current_mcs_for_link(key)
+    history_passed, _ = fake.calls[0]
+    assert history_passed == [10.0, 20.0, 30.0], \
+        "history must be oldest-first (matches ml/predictor.py's SinrPredictor.predict_next() contract)"
+
+
+def test_wifi_predictor_history_capped_at_8():
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)
+    ap = _make_test_rate_adapt_wifi(mcs=4, rate_adapt_enabled=True, sinr_predictor=fake)
+    key = ap.rate_adapt_link_key()
+    for i in range(10):
+        ap.rate_adapt_record_result(key, success=True, measured_sinr_db=float(i))
+    assert ap.link_rate_state[key]["sinr_history"] == [2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], \
+        "capped at 8 most-recent entries, oldest ones dropped"
+
+
+def test_wifi_predictor_disabled_rate_adapt_ignores_predictor_entirely():
+    # A predictor set but rate_adapt_enabled=False must be a complete
+    # no-op, same as every other rate-adapt-disabled regression guard.
+    fake = _FakePredictor(lag_k=3, fixed_prediction=100.0)
+    ap = _make_test_rate_adapt_wifi(mcs=3, rate_adapt_enabled=False, sinr_predictor=fake)
+    key = ap.rate_adapt_link_key()
+    ap.rate_adapt_record_result(key, success=True, measured_sinr_db=6.0)
+    assert ap.current_mcs_for_link(key) == 3
+    assert fake.calls == []
+    assert ap.link_rate_state == {}
+# Rashed-Step 13.E.1-08-23-2026-end
 
 
 # Rashed-Step 8.A-08-06-2026-start
@@ -1774,10 +1907,20 @@ if __name__ == "__main__":
         test_nru_predictor_unset_leaves_pre_13d_behavior_unchanged,
         test_nru_predictor_not_enough_history_falls_back_to_last_measured,
         test_nru_predictor_used_once_enough_history,
+        test_nru_predictor_skipped_when_history_is_exactly_constant,
         test_nru_predictor_history_passed_oldest_first,
         test_nru_predictor_history_capped_at_8,
         test_nru_predictor_disabled_rate_adapt_ignores_predictor_entirely,
         # Rashed-Step 13.D-08-23-2026-end
+        # Rashed-Step 13.E.1-08-23-2026-start
+        test_wifi_predictor_unset_leaves_pre_13e1_behavior_unchanged,
+        test_wifi_predictor_not_enough_history_falls_back_to_arf_mcs,
+        test_wifi_predictor_used_once_enough_history,
+        test_wifi_predictor_skipped_when_history_is_exactly_constant,
+        test_wifi_predictor_history_passed_oldest_first,
+        test_wifi_predictor_history_capped_at_8,
+        test_wifi_predictor_disabled_rate_adapt_ignores_predictor_entirely,
+        # Rashed-Step 13.E.1-08-23-2026-end
     ]
     passed = 0
     failed = 0

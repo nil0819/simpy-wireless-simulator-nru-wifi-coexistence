@@ -17,6 +17,9 @@ from common.common_phy import WaypointMobility
 from channel.channel import Channel
 from nr.nr import Config_NRL, GnbLicensedNR, NUMEROLOGY_SCS_KHZ, slot_duration_us
 from nr.ue import NrUeLicensed
+# Rashed-Step 13.E.3-08-23-2026-start
+from common.packet import export_packets_csv
+# Rashed-Step 13.E.3-08-23-2026-end
 
 
 def rand_pos_near(center: Pos, radius: float) -> Pos:
@@ -58,6 +61,9 @@ def run_simulation_licensed_nr(
         gnb_mobility_speed_mps: float = 0.0,
         ue_mobility_speed_mps: float = 0.0,
         mobility_pause_s: float = 0.0,
+        # Rashed-Step 13.E.3-08-23-2026-start
+        export_packets_csv_path: Optional[str] = None,
+        # Rashed-Step 13.E.3-08-23-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -150,6 +156,17 @@ def run_simulation_licensed_nr(
     overall_thr_mbps = total_bits / (simulation_time * 1e6) if simulation_time > 0 else 0.0
     print(f"TOTAL: slots_ok={total_succ} slots_failed={total_fail} "
           f"slot_success_rate={overall_success_rate:.4f} throughput={overall_thr_mbps:.3f} Mbps")
+
+    # Rashed-Step 13.E.3-08-23-2026-start
+    # Opt-in packet-level CSV export, same technology-agnostic
+    # export_packets_csv() (Step 9.D) every other scenario uses - keyed
+    # under "NR" (licensed 5G NR's own tech label, distinct from "NRU").
+    if export_packets_csv_path and gnbs:
+        export_packets_csv(
+            export_packets_csv_path, seed,
+            {"NR": {g.name: g.packet_log for g in gnbs}},
+        )
+    # Rashed-Step 13.E.3-08-23-2026-end
 
     return {
         "succeeded_slots": total_succ,

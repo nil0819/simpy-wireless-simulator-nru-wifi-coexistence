@@ -339,6 +339,26 @@ class GenericWirelessDevice:
 
         try:
             yield self.env.timeout(duration_us)
+            # Rashed-Step 13.E.2-08-23-2026-start
+            # Same "log measured SINR right where sinr_db() is already
+            # natural to compute" convention as wifi.py's send_frame()/
+            # nru.py's send_transmission() (Step 13.A) - here that point
+            # is right after the transmission completes uninterrupted,
+            # using this device's own just-completed ActiveTx (same
+            # target estimate_sinr_db() would compute). Only when a
+            # packet= was actually given (this class's packet identity
+            # is opt-in, unlike WiFi/NR-U where every frame always
+            # carries one) - unset otherwise, same as every other
+            # measured_sinr_db default. NOT logged in the except branch
+            # below: unlike wifi.py/nru.py's SINR-GATED success/failure
+            # (both branches there represent a real channel-quality
+            # measurement), this class has no MAC-level success/failure
+            # concept at all - the except branch here fires on
+            # simulation-ending interruption (GeneratorExit), not a bad
+            # channel reading, so there's nothing meaningful to measure.
+            if packet is not None:
+                packet.measured_sinr_db = self.channel.sinr_db(active)
+            # Rashed-Step 13.E.2-08-23-2026-end
             self.channel.unregister_tx(active, success=True)
             self.tx_log.append((tx_start, active.t_end, tech, True))
             # Rashed-Step 9.B-08-07-2026-start

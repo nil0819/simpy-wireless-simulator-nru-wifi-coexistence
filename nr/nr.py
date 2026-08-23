@@ -22,6 +22,9 @@ from typing import Dict, Optional, Any, List, Tuple
 
 from common.common import Pos, dist, log, colors
 from channel.channel import ActiveTx
+# Rashed-Step 13.E.3-08-23-2026-start
+from common.packet import Packet
+# Rashed-Step 13.E.3-08-23-2026-end
 
 
 # ---------------------------------------------------------------------
@@ -138,6 +141,45 @@ class Config_NRL:
     # NOTE: intentionally no ed_threshold_dbm here - licensed spectrum
     # means no LBT/CCA deferral. See module docstring.
 
+    # Rashed-Step 13.E.3-08-23-2026-start
+    # Nominal per-slot payload size stamped on each synthesized Packet
+    # (Step 13.E.3) - same "placeholder, nothing downstream reads it"
+    # convention as nru.py's Config_NR default (1500 bytes): this
+    # scheduler's slot duration/RB allocation is fixed regardless of
+    # payload_bytes, so this is bookkeeping only, not a real traffic-
+    # size model.
+    packet_payload_bytes: int = 1500
+
+    # Opt-in AHEAD-OF-TIME rate adaptation. False (default): EXACT
+    # pre-13.E.3 behavior - MCS is chosen AFTER the slot's real SINR is
+    # already known (select_mcs_for_sinr(sinr), a "genie-aided"/oracle
+    # pick that can only fail if even MCS0's threshold isn't met - see
+    # select_mcs_for_sinr()'s own docstring). True: MCS is instead
+    # chosen BEFORE the slot's real SINR is known, from that UE's own
+    # last-measured SINR (a real prediction under uncertainty, the same
+    # "ahead-of-time, may guess wrong" shape as WiFi's ARF (Step 11.A)
+    # and NR-U's CQI-style scheme (Step 11.B) - genuinely comparable to
+    # them for the first time, unlike the oracle default, which no
+    # heuristic or model could ever legitimately "beat" since it already
+    # has perfect real-time channel knowledge). A wrong ahead-of-time
+    # guess (chosen MCS's threshold not actually met this slot) is a
+    # real failure (DROPPED) here, even if a lower MCS would have
+    # worked - this is what makes rate_adapt_enabled=True a genuine,
+    # fallible adaptation scheme instead of a strictly-better oracle.
+    # See "Project details/Step 13.txt"'s 13.E.3 section for the full
+    # design rationale (this was a real design fork found while
+    # building this sub-step, not something anticipated when 13.E was
+    # first planned).
+    rate_adapt_enabled: bool = False
+    # Only consulted when rate_adapt_enabled is True AND a UE's link
+    # already has >= predictor.lag_k measurements - swaps "last
+    # measured SINR" for the predictor's PREDICTED next SINR, same
+    # duck-typed hook (.lag_k/.predict_next()) and same constant-link
+    # safety guard (Step 13.D-fix/13.E.1-fix) as Config_NR.sinr_predictor
+    # / wifi.Config.sinr_predictor.
+    sinr_predictor: Any = None
+    # Rashed-Step 13.E.3-08-23-2026-end
+
 
 class GnbLicensedNR:
     def __init__(
@@ -179,6 +221,18 @@ class GnbLicensedNR:
 
         self.channel.airtime_data_NRL.setdefault(name, 0)
         self.channel.airtime_control_NRL.setdefault(name, 0)
+
+        # Rashed-Step 13.E.3-08-23-2026-start
+        self._packet_seq = 0
+        # Every DATA packet this gNB has finished with (DELIVERED or
+        # DROPPED - never PENDING), same convention as nru.Gnb's
+        # packet_log (Step 8.G).
+        self.packet_log: List[Packet] = []
+        # Per-UE ahead-of-time rate-adaptation state (only populated/
+        # consulted when config.rate_adapt_enabled is True - see
+        # current_mcs_for_ue()/record_link_result()).
+        self.link_state: Dict[str, Dict[str, Any]] = {}
+        # Rashed-Step 13.E.3-08-23-2026-end
 
         env.process(self.start())
 
@@ -275,6 +329,62 @@ class GnbLicensedNR:
             return self._proportional_fair_allocation()
         return self._round_robin_allocation()
 
+    # Rashed-Step 13.E.3-08-23-2026-start
+    def _make_packet(self, destination: str) -> Packet:
+        """Synthesize a fresh Packet for one UE's slot allocation - same
+        "standalone placeholder, nothing downstream reads payload_bytes"
+        rationale as nru.Gnb._make_packet()."""
+        self._packet_seq += 1
+        return Packet(
+            packet_id=f"{self.name}-{self._packet_seq:06d}",
+            source=self.name,
+            destination=destination,
+            payload_bytes=self.config.packet_payload_bytes,
+            header_bytes=0,
+            created_at=self.env.now,
+        )
+
+    def current_mcs_for_ue(self, ue_name: str) -> Optional[int]:
+        """
+        The AHEAD-OF-TIME MCS to transmit this UE's next slot at, or
+        None to signal "use the existing oracle/post-hoc pick instead"
+        (rate_adapt_enabled=False, or this UE has no prior measurement
+        yet - the natural bootstrap case, same "no measurement yet"
+        fallback every other technology's rate adaptation already has).
+
+        When config.sinr_predictor is set AND this UE's link already
+        has >= predictor.lag_k measurements with genuine variation (the
+        same constant-link safety guard as Config_NR.sinr_predictor /
+        wifi.Config.sinr_predictor - Step 13.D-fix/13.E.1-fix), the pick
+        is based on the predictor's PREDICTED next SINR instead of the
+        raw last-measured value.
+        """
+        if not self.config.rate_adapt_enabled:
+            return None
+        state = self.link_state.get(ue_name)
+        if state is None or state.get("last_sinr_db") is None:
+            return None
+        predictor = self.config.sinr_predictor
+        if predictor is not None:
+            history = state.get("sinr_history", [])
+            if len(history) >= predictor.lag_k and len(set(history[-predictor.lag_k:])) > 1:
+                predicted = predictor.predict_next(history, technology_is_wifi=0)
+                return select_mcs_for_sinr(predicted)
+        return select_mcs_for_sinr(state["last_sinr_db"])
+
+    def record_link_result(self, ue_name: str, measured_sinr_db: float) -> None:
+        """Update this UE's ahead-of-time rate-adaptation state. No-op
+        when rate_adapt_enabled is False (keeps link_state empty in that
+        case, not just unused)."""
+        if not self.config.rate_adapt_enabled:
+            return
+        state = self.link_state.setdefault(ue_name, {"last_sinr_db": None, "sinr_history": []})
+        state["last_sinr_db"] = measured_sinr_db
+        history = state.setdefault("sinr_history", [])
+        history.append(measured_sinr_db)
+        del history[:-8]
+    # Rashed-Step 13.E.3-08-23-2026-end
+
     # -------------------------------------------------------------
     # One slot: register a transmission per scheduled UE, wait out the
     # slot, then settle SINR/MCS/throughput for each - mirrors the
@@ -290,7 +400,13 @@ class GnbLicensedNR:
 
         ue_by_name = {ue.name: ue for ue in self.ue_list}
         now = self.env.now
-        txs: List[Tuple[ActiveTx, int]] = []  # (ActiveTx, rb_count)
+        # Rashed-Step 13.E.3-08-23-2026-start
+        # (ActiveTx, rb_count, Packet, ahead-of-time chosen mcs or None)
+        # - the chosen-mcs is decided HERE, before the slot's real SINR
+        # is known, so it can be genuinely wrong (see current_mcs_for_ue()
+        # docstring / Config_NRL.rate_adapt_enabled's comment).
+        txs: List[Tuple[ActiveTx, int, Packet, Optional[int]]] = []
+        # Rashed-Step 13.E.3-08-23-2026-end
         for ue_name, rb_count in alloc.items():
             ue = ue_by_name[ue_name]
             bw_mhz_this_ue = self.config.bandwidth_mhz * (rb_count / self.total_rbs)
@@ -300,6 +416,10 @@ class GnbLicensedNR:
             # (so SINR is roughly independent of RB share - only the
             # number of RBs, and therefore throughput, changes).
             tx_power_dbm_this_ue = self.config.tx_power_dbm + 10.0 * math.log10(rb_count / self.total_rbs)
+            # Rashed-Step 13.E.3-08-23-2026-start
+            packet = self._make_packet(ue_name)
+            chosen_mcs = self.current_mcs_for_ue(ue_name)
+            # Rashed-Step 13.E.3-08-23-2026-end
             tx = ActiveTx(
                 tx_id=self.name,
                 tx_pos=self.current_pos(),
@@ -312,26 +432,66 @@ class GnbLicensedNR:
                 tech="NR",
                 bandwidth_mhz=bw_mhz_this_ue,
                 noise_figure_db=self.config.noise_figure_db,
+                # Rashed-Step 13.E.3-08-23-2026-start
+                packet=packet,
+                # Rashed-Step 13.E.3-08-23-2026-end
             )
             self.channel.register_tx(tx)
-            txs.append((tx, rb_count))
+            # Rashed-Step 13.E.3-08-23-2026-start
+            txs.append((tx, rb_count, packet, chosen_mcs))
+            # Rashed-Step 13.E.3-08-23-2026-end
 
         try:
             yield self.env.timeout(self.slot_us)
-            for tx, rb_count in txs:
+            for tx, rb_count, packet, chosen_mcs in txs:
+                ue_name = packet.destination
                 sinr = self.channel.sinr_db(tx)
-                mcs = select_mcs_for_sinr(sinr)
+                # Rashed-Step 13.E.3-08-23-2026-start
+                # Log measured SINR on the packet itself, success or
+                # failure alike - same convention as every other
+                # technology's Step 13.A site. Update this UE's ahead-
+                # of-time state for FUTURE slots regardless of how this
+                # slot resolves (no-op when rate_adapt_enabled is False).
+                packet.measured_sinr_db = sinr
+                self.record_link_result(ue_name, sinr)
+
+                if chosen_mcs is not None:
+                    # Ahead-of-time pick was made (rate_adapt_enabled,
+                    # and this UE already had prior history) - check
+                    # whether the REAL measured SINR actually clears the
+                    # CHOSEN mcs's threshold. A wrong guess is a genuine
+                    # failure here, even if a lower mcs would have
+                    # worked - this is what makes ahead-of-time
+                    # adaptation fallible, unlike the oracle fallback
+                    # below.
+                    required_db = NR_MCS_TABLE[chosen_mcs][0]
+                    if sinr >= required_db:
+                        mcs = chosen_mcs
+                    else:
+                        mcs = None
+                else:
+                    # rate_adapt_enabled=False, or no history yet for
+                    # this UE (bootstrap) - exact pre-13.E.3 oracle/
+                    # post-hoc behavior, byte-identical when
+                    # rate_adapt_enabled is False.
+                    mcs = select_mcs_for_sinr(sinr)
+
                 if mcs is not None:
                     eff = NR_MCS_TABLE[mcs][1]
                     bits = eff * (rb_count * self.rb_bandwidth_hz) * (self.slot_us / 1e6)
                     self.sent_completed(bits)
+                    packet.status = "DELIVERED"
+                    packet.delivered_at = self.env.now
                     log(self, f"UE {tx.rx_pos} slot OK: SINR={sinr:.2f} dB, MCS={mcs}, RBs={rb_count}, bits={bits:.0f}")
                 else:
                     self.sent_failed()
+                    packet.status = "DROPPED"
                     log(self, f"UE {tx.rx_pos} slot FAILED: SINR={sinr:.2f} dB below MCS0 threshold")
+                self.packet_log.append(packet)
                 self.channel.unregister_tx(tx, success=(mcs is not None))
+                # Rashed-Step 13.E.3-08-23-2026-end
         except BaseException:
-            for tx, _rb_count in txs:
+            for tx, _rb_count, _packet, _chosen_mcs in txs:
                 self.channel.unregister_tx(tx, success=False)
             raise
 

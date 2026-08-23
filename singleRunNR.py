@@ -29,13 +29,38 @@ from nr.nr import Config_NRL
 @click.option("--gnb-mobility-speed-mps", "gnb_mobility_speed_mps", type=float, default=0.0, help="gNB roaming speed (m/s), 0=static")
 @click.option("--ue-mobility-speed-mps", "ue_mobility_speed_mps", type=float, default=0.0, help="UE walking speed (m/s), 0=static")
 @click.option("--mobility-pause-s", "mobility_pause_s", type=float, default=0.0, help="Dwell time (s) at each waypoint if mobility is enabled")
+# Rashed-Step 13.E.3-08-23-2026-start
+@click.option("--export-packets-csv", "export_packets_csv_path", type=str, default=None, help="Path to write a packet-level CSV of every licensed-NR slot allocation (technology-agnostic format, same as singleRun.py's --export-packets-csv) - includes each packet's measured_sinr_db (Step 13.E.3). Default (unset) = no CSV, byte-identical to every pre-13.E.3 run.")
+@click.option("--rate-adapt", "rate_adapt", is_flag=True, default=False, help="Enable AHEAD-OF-TIME rate adaptation (Step 13.E.3): MCS is chosen from the UE's last-measured SINR BEFORE this slot's real SINR is known, instead of the default oracle/post-hoc pick (which already has perfect real-time channel knowledge and can only fail below MCS0). A wrong ahead-of-time guess is a genuine failure (DROPPED) here. Default (unset/False) = the pre-13.E.3 oracle behavior, byte-identical to every earlier run.")
+@click.option("--rate-adapt-ml-model", "rate_adapt_ml_model", type=str, default=None, help="Path to a trained SINR-prediction model (ml/train_sinr_model.py's saved output). When set, --rate-adapt's ahead-of-time pick uses the model's PREDICTED next SINR instead of the raw last-measured value, once a UE's link has enough history. Requires --rate-adapt also set.")
+# Rashed-Step 13.E.3-08-23-2026-end
 def single_run_nr(
         runs, seed, gnb_number, ues_per_gnb, simulation_time,
         area_w, area_h, gnb_pos, ue_radius,
         numerology, bandwidth_mhz, scheduler, tx_power_dbm, f_ghz, noise_figure_db,
         gnb_mobility_speed_mps, ue_mobility_speed_mps, mobility_pause_s,
+        # Rashed-Step 13.E.3-08-23-2026-start
+        export_packets_csv_path=None, rate_adapt=False, rate_adapt_ml_model=None,
+        # Rashed-Step 13.E.3-08-23-2026-end
 ):
     gnb_positions = parse_pos_list_nr(gnb_pos, "--gnb-pos") if gnb_pos else None
+
+    # Rashed-Step 13.E.3-08-23-2026-start
+    if rate_adapt_ml_model and not rate_adapt:
+        raise click.BadParameter(
+            "--rate-adapt-ml-model requires --rate-adapt to also be set "
+            "(the model only replaces WHICH SINR value drives an already-"
+            "enabled ahead-of-time pick, it doesn't enable rate adaptation "
+            "on its own)."
+        )
+    sinr_predictor = None
+    if rate_adapt_ml_model:
+        # Imported here, not at module level - keeps this CLI's normal
+        # dependency footprint free of sklearn/pandas/joblib unless the
+        # flag is actually used (Step 13.txt design decision 6).
+        from ml.predictor import SinrPredictor
+        sinr_predictor = SinrPredictor(rate_adapt_ml_model)
+    # Rashed-Step 13.E.3-08-23-2026-end
 
     config = Config_NRL(
         numerology=numerology,
@@ -44,6 +69,10 @@ def single_run_nr(
         tx_power_dbm=tx_power_dbm,
         f_ghz=f_ghz * 1e9,
         noise_figure_db=noise_figure_db,
+        # Rashed-Step 13.E.3-08-23-2026-start
+        rate_adapt_enabled=rate_adapt,
+        sinr_predictor=sinr_predictor,
+        # Rashed-Step 13.E.3-08-23-2026-end
     )
 
     for i in range(runs):
@@ -56,6 +85,9 @@ def single_run_nr(
             gnb_mobility_speed_mps=gnb_mobility_speed_mps,
             ue_mobility_speed_mps=ue_mobility_speed_mps,
             mobility_pause_s=mobility_pause_s,
+            # Rashed-Step 13.E.3-08-23-2026-start
+            export_packets_csv_path=export_packets_csv_path,
+            # Rashed-Step 13.E.3-08-23-2026-end
         )
 
 

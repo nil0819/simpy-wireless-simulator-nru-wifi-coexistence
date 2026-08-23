@@ -971,6 +971,24 @@ class Gnb:
         assumed to be an improvement going in - Step 13.C's own
         evaluation found this same model didn't beat plain "last
         observed" on MAE.
+
+        Rashed-Step 13.D-fix (2026-08-23): the predictor is deliberately
+        SKIPPED when the recent history is exactly constant (a genuinely
+        static/unshadowed-relative-to-itself link - the same "constant-
+        link" category Step 13.C already tags and reports separately).
+        Investigated a real empirical collapse: on a constant 12.807 dB
+        link, the model predicted 16.111 dB (a persistent +3.3 dB
+        overestimate) from a [12.807]*3 history, crossing an MCS
+        threshold the real channel could never clear - every
+        transmission after that hit the retry limit, for the rest of
+        the run, because a constant history never gives the model new
+        information to self-correct with. Persistence (last observed)
+        is EXACTLY correct on a constant link by construction (13.C's
+        own finding - 0.000 MAE there), so there is no principled reason
+        to ever prefer a noisy model prediction over it in this specific,
+        cheaply-detectable case. This guard does not touch the variable-
+        link case at all - the predictor is still used there exactly as
+        before.
         """
         if not self.config_nr.rate_adapt_enabled or link_key is None:
             return self.config_nr.mcs
@@ -981,9 +999,11 @@ class Gnb:
         predictor = self.config_nr.sinr_predictor
         if predictor is not None:
             history = state.get("sinr_history", [])
-            if len(history) >= predictor.lag_k:
+            # Rashed-Step 13.D-fix-08-23-2026-start
+            if len(history) >= predictor.lag_k and len(set(history[-predictor.lag_k:])) > 1:
                 predicted = predictor.predict_next(history, technology_is_wifi=0)
                 return self._select_mcs_for_sinr(predicted)
+            # Rashed-Step 13.D-fix-08-23-2026-end
         # Rashed-Step 13.D-08-23-2026-end
         return self._select_mcs_for_sinr(state["last_sinr_db"])
 

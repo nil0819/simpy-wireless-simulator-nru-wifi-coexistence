@@ -111,6 +111,23 @@ class Config:
     rate_adapt_down_streak: int = 2
     # Rashed-Step 11.A-08-21-2026-end
 
+    # Rashed-Step 13.E.1-08-23-2026-start
+    # Opt-in ML-driven MCS selection, mirroring Config_NR.sinr_predictor
+    # (Step 13.D). None (default) = ARF's streak-based up/down logic
+    # exactly as Step 11.A left it - zero behavior change. When set (a
+    # duck-typed object exposing .lag_k/.predict_next(), see
+    # ml/predictor.py's SinrPredictor), current_mcs_for_link() switches
+    # this link to a CQI-style direct SINR-threshold lookup on the
+    # predictor's PREDICTED next SINR instead, once enough history
+    # exists - bypassing the streak counters entirely while active (the
+    # two are alternate MCS-selection modes for the same link, not
+    # blended - see "Project details/Step 13.txt"'s 13.E section for
+    # the full rationale). Kept as Any (not a real type import) so
+    # wifi.py never needs to import sklearn/pandas/joblib itself, same
+    # zero-cost-when-unused convention as nru.py's field.
+    sinr_predictor: Any = None
+    # Rashed-Step 13.E.1-08-23-2026-end
+
 
 
 class WiFi:
@@ -594,7 +611,10 @@ class WiFi:
             log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config.mcs}) = {required_sinr:.2f} dB (EDCA {ac})")
             was_sent = (sinr >= required_sinr)
             # Rashed-Step 11.A-08-21-2026-start
-            self.rate_adapt_record_result(self.rate_adapt_link_key(), was_sent)
+            # Rashed-Step 13.E.1: also pass measured_sinr_db for the
+            # predictor's rolling history (harmless no-op unless
+            # config.sinr_predictor is set - see rate_adapt_record_result()).
+            self.rate_adapt_record_result(self.rate_adapt_link_key(), was_sent, measured_sinr_db=sinr)
             # Rashed-Step 11.A-08-21-2026-end
 
             if was_sent:
@@ -1021,7 +1041,9 @@ class WiFi:
             was_sent = (sinr >= required_sinr)
             # Rashed-Step 11.A-08-21-2026-start
             # ARF feedback - no-op when rate adaptation is disabled.
-            self.rate_adapt_record_result(self.rate_adapt_link_key(), was_sent)
+            # Rashed-Step 13.E.1: also pass measured_sinr_db (see the
+            # EDCA call site's comment above for why).
+            self.rate_adapt_record_result(self.rate_adapt_link_key(), was_sent, measured_sinr_db=sinr)
             # Rashed-Step 11.A-08-21-2026-end
 
             if was_sent:
@@ -1258,18 +1280,73 @@ class WiFi:
         state yet (first transmission), or link_key is None - so
         "adaptation off" and "adaptation on, before any feedback"
         both behave exactly like today.
+
+        Rashed-Step 13.E.1: when config.sinr_predictor is set AND this
+        link already has at least predictor.lag_k measurements, the MCS
+        pick is a CQI-style direct SINR-threshold lookup on the
+        predictor's PREDICTED next SINR instead - bypassing ARF's
+        streak-based state entirely while active. Predictor unset, or
+        not enough history yet, falls back to the exact pre-13.E ARF
+        behavior unchanged (mirrors nru.py's Step 13.D pattern).
+
+        Rashed-Step 13.E.1-fix (2026-08-23): same constant-link guard as
+        nru.py's - the predictor is SKIPPED when the recent history is
+        exactly constant, falling back to ARF's own streak-based mcs
+        instead. Investigated a real empirical collapse on a constant
+        12.807 dB link (see nru.py's current_mcs_for_link() docstring
+        for the full root-cause writeup, and "Project details/Step
+        13.txt"'s 13.E.1 section for the Wi-Fi-specific numbers) - a
+        constant history never gives the model new information to
+        self-correct a bad prediction with, so a persistent
+        overestimate can permanently lock a static link onto an
+        unreachable MCS. ARF's own last-measured-driven state is exactly
+        correct on a constant link by construction, same reasoning as
+        13.C's persistence baseline. Variable-link behavior is
+        completely untouched by this guard.
         """
         if not self.config.rate_adapt_enabled or link_key is None:
             return self.config.mcs
         state = self.link_rate_state.get(link_key)
+        # Rashed-Step 13.E.1-08-23-2026-start
+        predictor = self.config.sinr_predictor
+        if predictor is not None and state is not None:
+            history = state.get("sinr_history", [])
+            # Rashed-Step 13.E.1-fix-08-23-2026-start
+            if len(history) >= predictor.lag_k and len(set(history[-predictor.lag_k:])) > 1:
+                predicted = predictor.predict_next(history, technology_is_wifi=1)
+                return self._select_mcs_for_sinr(predicted)
+            # Rashed-Step 13.E.1-fix-08-23-2026-end
+        # Rashed-Step 13.E.1-08-23-2026-end
         return state["mcs"] if state is not None else self.config.mcs
 
-    def rate_adapt_record_result(self, link_key: Optional[str], success: bool) -> None:
+    @staticmethod
+    def _select_mcs_for_sinr(sinr_db: float) -> int:
+        """
+        Rashed-Step 13.E.1: CQI-style direct selection, same shape as
+        nru.py's Gnb._select_mcs_for_sinr() - the HIGHEST mcs in
+        WIFI_MCS_SINR_THRESHOLDS_DB whose required threshold is <=
+        sinr_db. Falls back to the table's lowest mcs if even that
+        isn't met.
+        """
+        candidates = [mcs for mcs, thr in WIFI_MCS_SINR_THRESHOLDS_DB.items() if thr <= sinr_db]
+        if not candidates:
+            return min(WIFI_MCS_SINR_THRESHOLDS_DB.keys())
+        return max(candidates)
+
+    def rate_adapt_record_result(self, link_key: Optional[str], success: bool, measured_sinr_db: Optional[float] = None) -> None:
         """
         ARF feedback: call once per completed transmission attempt with
         whether it succeeded. No-op when rate adaptation is disabled or
         link_key is None (keeps link_rate_state empty in that case, not
         just unused - see current_mcs_for_link()).
+
+        Rashed-Step 13.E.1: measured_sinr_db is a new optional param
+        (default None, so every pre-13.E call site/test keeps working
+        unchanged) - when given, it's appended to a short rolling
+        per-link sinr_history (capped at 8, same as nru.py's), used
+        only when config.sinr_predictor is set. Harmless extra
+        bookkeeping otherwise - the streak logic below is completely
+        untouched.
         """
         if not self.config.rate_adapt_enabled or link_key is None:
             return
@@ -1290,6 +1367,12 @@ class WiFi:
             if state["fail_streak"] >= self.config.rate_adapt_down_streak:
                 state["mcs"] = max(state["mcs"] - 1, min_mcs)
                 state["fail_streak"] = 0
+        # Rashed-Step 13.E.1-08-23-2026-start
+        if measured_sinr_db is not None:
+            history = state.setdefault("sinr_history", [])
+            history.append(measured_sinr_db)
+            del history[:-8]
+        # Rashed-Step 13.E.1-08-23-2026-end
     # Rashed-Step 11.A-08-21-2026-end
 
     def sent_failed(self):

@@ -146,10 +146,34 @@ python ml/train_sinr_model.py
 
 ### ML-driven NR-U rate adaptation (`ml/predictor.py`, Step 13.D)
 
-Opt-in flag `--nru-rate-adapt-ml-model <path>` (requires `--nru-rate-adapt` also set) swaps NR-U's CQI-style MCS pick from "last measured SINR" to a Step 13.C model's *predicted* next SINR, once a link has enough history. Demonstrates the simulator is easy to extend with an ML-in-the-loop pathway (zero cost when the flag is unused - `ml/predictor.py`'s sklearn/pandas imports are lazy). Honest result: in the one scenario with a real difference, the plain heuristic still beat the model-driven version on packet delivery ratio (96.9% vs 89.3%) - consistent with 13.C's finding that the model doesn't beat persistence on MAE. See `Project details/Step 13.txt` for the full comparison.
+Opt-in flag `--nru-rate-adapt-ml-model <path>` (requires `--nru-rate-adapt` also set) swaps NR-U's CQI-style MCS pick from "last measured SINR" to a Step 13.C model's *predicted* next SINR, once a link has enough history. Demonstrates the simulator is easy to extend with an ML-in-the-loop pathway (zero cost when the flag is unused - `ml/predictor.py`'s sklearn/pandas imports are lazy). The predictor is automatically skipped (falls back to plain last-observed) whenever a link's recent SINR history is exactly constant - a fix for a real collapse bug found and root-caused after this feature shipped (a constant history can lock the model onto a persistently wrong prediction with no way to self-correct). With that fix in place, re-measured result: on a static link the predictor is now byte-for-byte identical to the heuristic (97.9% PDR both, 20 seeds); on a mobile link there's no meaningful difference either (69.0% vs 68.5% PDR). See `Project details/Step 13.txt` for the full comparison, including the original (now-superseded) pre-fix numbers.
 
 ```bash
 python singleRun.py --nru-rate-adapt --nru-rate-adapt-ml-model ml/data/sinr_model.joblib -t 0.1
+```
+
+### ML-driven Wi-Fi rate adaptation (Step 13.E.1)
+
+Same idea, mirrored onto Wi-Fi: `--wifi-rate-adapt-ml-model <path>` (requires `--wifi-rate-adapt`) switches Wi-Fi from ARF's success/fail-streak logic to a CQI-style MCS pick from the model's predicted SINR, once a link has enough history - reuses the same `ml/data/sinr_model.joblib` (it already has a `technology_is_wifi` feature). Initial testing found the predictor could fully collapse a static/constant-SINR link (a persistently wrong prediction with no way to self-correct from an unchanging history) - fixed by skipping the predictor whenever the recent history is exactly constant, falling back to plain ARF instead (same fix applied to NR-U's 13.D). With the fix, re-measured result (20 seeds each): on a static link the predictor is now byte-for-byte identical to ARF (89.9% PDR both, zero remaining risk); on a mobile link the predictor gives a genuine, modest, reproducible win (72.6% vs 76.0% PDR). See `Project details/Step 13.txt`'s 13.E.1 section for the full comparison, root-cause analysis, and the fix.
+
+```bash
+python singleRun.py --wifi-rate-adapt --wifi-rate-adapt-ml-model ml/data/sinr_model.joblib -t 0.1
+```
+
+### Generic-device SINR logging (Step 13.E.2)
+
+`GenericTransmitter`/`GenericWirelessDevice` now populate `measured_sinr_db` on every completed transmission that carries a `Packet` (same convention as Wi-Fi/NR-U, Step 13.A) - no rate-adaptation counterpart exists here since this class has no MCS/data-rate concept at all. Opt-in `--export-packets-csv <path>` on `singleRunGeneric.py` exports these rows (technology bucket `"GENERIC"`) via the same technology-agnostic CSV format every other scenario uses.
+
+```bash
+python singleRunGeneric.py --ap-number 1 --gnb-number 1 --generic-number 2 -t 0.05 --export-packets-csv generic_packets.csv
+```
+
+### Licensed NR: SINR logging + ahead-of-time rate adaptation (Step 13.E.3)
+
+`nr.py`'s existing `select_mcs_for_sinr()` pick is a "genie-aided" oracle - it already runs AFTER a slot's real SINR is known, so no predictor could ever legitimately beat it. Step 13.E.3 adds a genuine, fallible AHEAD-OF-TIME mode instead: `--rate-adapt` picks a UE's MCS from its last-measured SINR BEFORE the slot's real SINR is known (a wrong guess now really fails, unlike the oracle); `--rate-adapt-ml-model <path>` swaps that for the model's prediction. `--export-packets-csv <path>` exports per-slot packets (technology `"NR"`), each with `measured_sinr_db`. Honest result: in the one scenario tested, ordering was consistent across 20 seeds - oracle (46.3% slot success, an unbeatable ceiling) > ahead-of-time heuristic (37.7%) > ahead-of-time ML-driven (22.5%), the clearest negative ML result in Step 13, most likely because the reused model was trained on Wi-Fi/NR-U data, not licensed NR's very different SINR regime. See `Project details/Step 13.txt`'s 13.E.3 section for the full writeup.
+
+```bash
+python singleRunNR.py --gnb-number 1 --ues-per-gnb 3 -t 0.1 --rate-adapt --rate-adapt-ml-model ml/data/sinr_model.joblib --export-packets-csv nr_packets.csv
 ```
 
 ## Testing
@@ -159,7 +183,7 @@ Assert-based regression suite (no print-and-eyeball scripts for anything added s
 pip install pytest
 pytest test/
 ```
-188 tests passing as of Step 13.D. Individual files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
+211 tests passing as of Step 13.E.3 - Step 13.E (SINR/ML-driven rate adaptation across all three technologies) is now fully complete. Individual files are also runnable directly (`python test/test_phy_unit.py`, etc.) without pytest installed.
 
 ## Current Work Status
 
@@ -180,7 +204,11 @@ pytest test/
 ----> Step 13.A — per-packet channel-quality logging: `Packet.measured_sinr_db`, populated at every WiFi/NR-U transmission attempt (success AND failure alike), exported as a new trailing `measured_sinr_db` column in the packet-level CSV. Prerequisite for the SINR/channel-quality prediction work (see `Project details/Step 13.txt`) - a first step toward an IEEE CCNC 2027 submission demonstrating the simulator's extensibility as open-source software for wireless networking research
 ----> Step 13.B — documented 24-scenario SINR dataset generation (`ml/generate_sinr_dataset.py`), one timestamped packet CSV per scenario, non-destructive
 ----> Step 13.C — persistence baseline + gradient-boosting SINR predictor (`ml/train_sinr_model.py`), split by scenario not row; honest result: model doesn't beat persistence on MAE for variable links (does on RMSE)
-----> Step 13.D — closes the loop: opt-in `--nru-rate-adapt-ml-model` flag drives NR-U rate adaptation from the Step 13.C model's predictions instead of raw last-measured SINR (`ml/predictor.py`). Honest result: the plain heuristic still wins on packet delivery ratio in the one scenario tested with real divergence, consistent with 13.C - 13.D's value is the demonstrated extensibility, not an outcome improvement
+----> Step 13.D — closes the loop: opt-in `--nru-rate-adapt-ml-model` flag drives NR-U rate adaptation from the Step 13.C model's predictions instead of raw last-measured SINR (`ml/predictor.py`)
+----> Step 13.E.1 — same ML-driven closed loop mirrored onto Wi-Fi's ARF (`--wifi-rate-adapt-ml-model`, reuses the same trained model)
+----> Step 13.D/13.E.1 FIX — found and fixed a real collapse bug (predictor could permanently lock a genuinely constant-SINR link onto an unreachable MCS); with the fix, the predictor is now provably safe on static links (identical to the heuristic) for both technologies, and gives a genuine modest win for Wi-Fi on mobile links (no meaningful difference for NR-U's mobile case)
+----> Step 13.E.2 — SINR logging extended to GenericWirelessDevice/GenericTransmitter (`measured_sinr_db` populated on every completed transmission carrying a Packet); new `--export-packets-csv` flag on `singleRunGeneric.py`. No rate-adaptation counterpart - this device class has no MCS/data-rate concept
+----> Step 13.E.3 — licensed NR (`nr/nr.py`) gains full Packet/SINR-logging parity plus a new opt-in ahead-of-time rate-adaptation mode (`--rate-adapt`/`--rate-adapt-ml-model`) alongside its existing oracle/post-hoc MCS pick. Honest result: oracle > heuristic > ML-driven consistently across 20 seeds, the clearest negative ML finding in Step 13 (likely domain mismatch - the reused model was trained on Wi-Fi/NR-U data). STEP 13.E (13.E.1-13.E.3) IS NOW FULLY COMPLETE
 
 Full detail (design rationale, exact verified numbers, what was deliberately left out) for every sub-step above is in `Project details/Step N.txt`; `Project details/STATUS - resume context.txt` is the current single-file "start here" summary.
 

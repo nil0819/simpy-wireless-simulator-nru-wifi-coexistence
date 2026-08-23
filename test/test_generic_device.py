@@ -397,6 +397,99 @@ def test_sniff_visible_tx_packet_is_none_when_not_carried():
 # Rashed-Step 9.B-08-07-2026-end
 
 
+# Rashed-Step 13.E.2-08-23-2026-start
+# =======================================================================
+# measured_sinr_db logging: transmit(packet=...) now populates the
+# packet's channel-quality reading on uninterrupted completion, same
+# "log SINR right where it's already natural to compute" convention as
+# wifi.py/nru.py's Step 13.A (see transmit()'s own comment for why the
+# except/interrupted branch deliberately does NOT log it).
+# =======================================================================
+
+def test_transmit_with_packet_populates_measured_sinr_db_on_completion():
+    env = simpy.Environment()
+    ch = make_channel(env)
+    cfg = Config_Generic(tx_power_dbm=20.0, f_hz=5.18e9, bandwidth_mhz=20.0)
+    dev = GenericWirelessDevice(env, "GEN1", ch, cfg, pos=(0.0, 0.0))
+
+    pkt = Packet(packet_id="p1", source="GEN1", destination="GEN2",
+                 payload_bytes=100, header_bytes=20, created_at=0.0)
+
+    assert pkt.measured_sinr_db is None, "must default to None before any transmission"
+
+    env.process(dev.transmit(duration_us=1000, rx_pos=(10.0, 0.0), packet=pkt))
+    env.run(until=5000)
+
+    assert pkt.measured_sinr_db is not None, "must be populated once transmit() completes uninterrupted"
+    assert isinstance(pkt.measured_sinr_db, float)
+
+
+def test_transmit_with_packet_measured_sinr_db_matches_channel_sinr_db():
+    # Same value estimate_sinr_db()/a direct channel.sinr_db() call
+    # would have produced for this exact ActiveTx - not some
+    # independently-recomputed number.
+    env = simpy.Environment()
+    ch = make_channel(env)
+    cfg = Config_Generic(tx_power_dbm=20.0, f_hz=5.18e9, bandwidth_mhz=20.0)
+    dev = GenericWirelessDevice(env, "GEN1", ch, cfg, pos=(0.0, 0.0))
+
+    pkt = Packet(packet_id="p1", source="GEN1", destination="GEN2",
+                 payload_bytes=100, header_bytes=20, created_at=0.0)
+
+    captured_active_tx = []
+
+    def run():
+        proc = env.process(dev.transmit(duration_us=1000, rx_pos=(10.0, 0.0), packet=pkt))
+        yield env.timeout(10)
+        captured_active_tx.append(dev.active_tx)
+        yield proc
+
+    env.process(run())
+    env.run(until=5000)
+
+    # Recompute independently against the SAME ActiveTx object captured
+    # mid-flight - the interference/noise conditions on the channel
+    # were identical at completion time in this single-transmitter,
+    # no-interference scenario, so this must match exactly.
+    expected = ch.sinr_db(captured_active_tx[0])
+    assert pkt.measured_sinr_db == expected
+
+
+def test_transmit_with_no_packet_never_touches_measured_sinr_db():
+    # No packet given -> nothing to populate, no crash (packet is None,
+    # not a Packet instance - the guard must check for that).
+    env = simpy.Environment()
+    ch = make_channel(env)
+    cfg = Config_Generic()
+    dev = GenericWirelessDevice(env, "GEN1", ch, cfg, pos=(0.0, 0.0))
+
+    env.process(dev.transmit(duration_us=1000))
+    env.run(until=5000)  # must not raise
+
+
+def test_transmit_with_packet_interrupted_leaves_measured_sinr_db_unset():
+    # Mirrors test_transmit_with_packet_interrupted_does_not_log (9.B):
+    # a transmission cut short mid-flight never reaches the completion
+    # point where measured_sinr_db would be set - the except/
+    # GeneratorExit branch has no channel-quality measurement to make
+    # (see transmit()'s own comment).
+    env = simpy.Environment()
+    ch = make_channel(env)
+    cfg = Config_Generic()
+    dev = GenericWirelessDevice(env, "GEN1", ch, cfg, pos=(0.0, 0.0))
+
+    pkt = Packet(packet_id="p1", source="GEN1", destination="GEN2",
+                 payload_bytes=100, header_bytes=20, created_at=0.0)
+
+    gen = dev.transmit(duration_us=10000, packet=pkt)
+    env.process(gen)
+    env.run(until=4000)  # well before the 10000us transmission finishes
+    gen.close()
+
+    assert pkt.measured_sinr_db is None, "an interrupted transmission must not populate measured_sinr_db"
+# Rashed-Step 13.E.2-08-23-2026-end
+
+
 def test_mobile_device_position_changes_over_time():
     env = simpy.Environment()
     ch = make_channel(env)
@@ -424,6 +517,12 @@ if __name__ == "__main__":
         test_estimate_sinr_db_matches_channel_sinr_db_directly,
         test_estimate_sinr_db_raises_when_nothing_in_flight,
         test_static_device_never_moves,
+        # Rashed-Step 13.E.2-08-23-2026-start
+        test_transmit_with_packet_populates_measured_sinr_db_on_completion,
+        test_transmit_with_packet_measured_sinr_db_matches_channel_sinr_db,
+        test_transmit_with_no_packet_never_touches_measured_sinr_db,
+        test_transmit_with_packet_interrupted_leaves_measured_sinr_db_unset,
+        # Rashed-Step 13.E.2-08-23-2026-end
         test_mobile_device_position_changes_over_time,
     ]
     passed = 0

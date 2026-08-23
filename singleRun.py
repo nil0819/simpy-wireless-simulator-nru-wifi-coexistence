@@ -167,6 +167,9 @@ def parse_traffic_class_mix(raw_values, label: str):
 # Rashed-Step 13.D-08-23-2026-start
 @click.option("--nru-rate-adapt-ml-model", "nru_rate_adapt_ml_model", type=str, default=None, help="Path to a trained SINR-prediction model (ml/train_sinr_model.py's saved output, e.g. ml/data/sinr_model.joblib). When set, NR-U's CQI-style rate adaptation (--nru-rate-adapt, required alongside this flag) uses the model's PREDICTED next SINR instead of the raw last-measured value, once a link has enough history (ml/train_sinr_model.LAG_K measurements). Default (unset/None) = every pre-Step-13.D run's exact behavior. NOTE: Step 13.C's own evaluation found this model does not beat plain 'last observed' on MAE for held-out scenarios - this flag is provided to empirically test its effect on actual coexistence outcomes, not because it's known to help (see Project details/Step 13.txt's 13.D section).")
 # Rashed-Step 13.D-08-23-2026-end
+# Rashed-Step 13.E.1-08-23-2026-start
+@click.option("--wifi-rate-adapt-ml-model", "wifi_rate_adapt_ml_model", type=str, default=None, help="Same idea as --nru-rate-adapt-ml-model, for Wi-Fi. When set, Wi-Fi's rate adaptation (--wifi-rate-adapt, required alongside this flag) switches from ARF's success/fail-streak logic to a CQI-style direct MCS pick from the model's PREDICTED next SINR, once a link has enough history. Default (unset/None) = every pre-Step-13.E run's exact ARF behavior. The same model file trained for NR-U works here too (it was trained with a technology_is_wifi feature already) - no separate Wi-Fi model needed.")
+# Rashed-Step 13.E.1-08-23-2026-end
 
 def single_run(
         runs: int,
@@ -256,6 +259,9 @@ def single_run(
         # Rashed-Step 13.D-08-23-2026-start
         nru_rate_adapt_ml_model: str = None,
         # Rashed-Step 13.D-08-23-2026-end
+        # Rashed-Step 13.E.1-08-23-2026-start
+        wifi_rate_adapt_ml_model: str = None,
+        # Rashed-Step 13.E.1-08-23-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -314,6 +320,20 @@ def single_run(
         nru_sinr_predictor = SinrPredictor(nru_rate_adapt_ml_model)
     # Rashed-Step 13.D-08-23-2026-end
 
+    # Rashed-Step 13.E.1-08-23-2026-start
+    if wifi_rate_adapt_ml_model and not wifi_rate_adapt:
+        raise click.BadParameter(
+            "--wifi-rate-adapt-ml-model requires --wifi-rate-adapt to also "
+            "be set (the model only replaces WHICH SINR value drives an "
+            "already-enabled MCS pick, it doesn't enable rate adaptation "
+            "on its own)."
+        )
+    wifi_sinr_predictor = None
+    if wifi_rate_adapt_ml_model:
+        from ml.predictor import SinrPredictor
+        wifi_sinr_predictor = SinrPredictor(wifi_rate_adapt_ml_model)
+    # Rashed-Step 13.E.1-08-23-2026-end
+
     # Rashed-Step 8.B-08-06-2026-start
     # Rashed-Step 8.C-08-06-2026: added packet_size_bytes=... (defaults
     # to None, matching TrafficConfig's own default - unset means "use
@@ -354,6 +374,9 @@ def single_run(
                               # Rashed-Step 11.A-08-21-2026-start
                               rate_adapt_enabled=wifi_rate_adapt,
                               # Rashed-Step 11.A-08-21-2026-end
+                              # Rashed-Step 13.E.1-08-23-2026-start
+                              sinr_predictor=wifi_sinr_predictor,
+                              # Rashed-Step 13.E.1-08-23-2026-end
                               ),
                        Config_NR(16, 9, synchronization_slot_duration, max_sync_slot_desync, min_sync_slot_desync,  nru_observation_slot, nru_cw_min, nru_cw_max, mcot,
                                  # Rashed-Step 8.D-08-06-2026-start
