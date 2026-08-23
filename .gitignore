@@ -9,6 +9,13 @@ log/
 # Output files
 lool.csv
 
+# Rashed-Step 13.B-08-23-2026-start
+# Generated ML training data (ml/generate_sinr_dataset.py) - large,
+# fully reproducible from the script + its documented grid (Step
+# 13.txt), so not worth committing. Re-run the script to regenerate.
+ml/data/
+# Rashed-Step 13.B-08-23-2026-end
+
 # OS
 .DS_Store
 

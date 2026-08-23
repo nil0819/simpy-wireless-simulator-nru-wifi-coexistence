@@ -128,6 +128,14 @@ python singleRunAttacker.py --help
 python singleRunAttacker.py --ap-number 2 --gnb-number 1 -t 0.1 --spoof-target "AP 1" --spoof-count 5 --replay-max 3
 ```
 
+### SINR/channel-quality dataset generation (`ml/generate_sinr_dataset.py`)
+
+Step 13.B: runs a documented grid of Wi-Fi + NR-U coexistence scenarios (varying distance, shadowing, mobility, interferer count) and combines their per-packet `measured_sinr_db` (Step 13.A) into one training CSV, plus a scenario manifest - the data prerequisite for the SINR-prediction work in `Project details/Step 13.txt`. Output goes to `ml/data/` (gitignored, regenerate by re-running the script).
+
+```bash
+python ml/generate_sinr_dataset.py
+```
+
 ## Testing
 
 Assert-based regression suite (no print-and-eyeball scripts for anything added since Step 5.H) - covers PHY primitives, the packet system, `GenericWirelessDevice`, and `PacketAttacker`:
