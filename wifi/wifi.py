@@ -585,6 +585,11 @@ class WiFi:
         try:
             yield self.env.timeout(frame.frame_time)
             sinr = self.channel.sinr_db(tx)
+            # Rashed-Step 13.A-08-23-2026-start
+            # Log measured SINR on the packet itself, success or
+            # failure alike - see Packet.measured_sinr_db docstring.
+            frame.packet.measured_sinr_db = sinr
+            # Rashed-Step 13.A-08-23-2026-end
             required_sinr = self.required_sinr_db()
             log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config.mcs}) = {required_sinr:.2f} dB (EDCA {ac})")
             was_sent = (sinr >= required_sinr)
@@ -999,6 +1004,11 @@ class WiFi:
             # Rashed-Step 4.C_2-01-21-2026-end
             # Rashed-Step 4.D_2-01-28-2026-start
             sinr = self.channel.sinr_db(tx)
+            # Rashed-Step 13.A-08-23-2026-start
+            # Log measured SINR on the packet itself, success or
+            # failure alike - see Packet.measured_sinr_db docstring.
+            self.frame_to_send.packet.measured_sinr_db = sinr
+            # Rashed-Step 13.A-08-23-2026-end
             # Rashed-Step 5.D-02-06-2026-start
             # UPGRADE: required SINR now depends on the configured MCS
             # (per-MCS table) instead of one flat threshold for every

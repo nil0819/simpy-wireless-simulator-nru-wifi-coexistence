@@ -514,6 +514,9 @@ def test_packet_to_csv_row_delivered_has_numeric_latency():
         # Rashed-Step 10.E-08-11-2026-start
         "best_effort",  # traffic_class - new column, appended at the end
         # Rashed-Step 10.E-08-11-2026-end
+        # Rashed-Step 13.A-08-23-2026-start
+        "",  # measured_sinr_db - unset here (_make_delivered doesn't set it), new trailing column
+        # Rashed-Step 13.A-08-23-2026-end
     ]
 
 
@@ -1066,13 +1069,26 @@ packet-level CSV export (deferred from Step 10.A).
 
 
 def test_packet_csv_header_ends_with_traffic_class():
-    assert PACKET_CSV_HEADER[-1] == "traffic_class"
+    # Rashed-Step 13.A-08-23-2026-start
+    # No longer literally the LAST column - Step 13.A appended
+    # measured_sinr_db after it - but traffic_class's own position
+    # relative to the columns that existed as of Step 10.E is still
+    # worth pinning down, so check it's second-to-last instead of
+    # deleting this test outright.
+    assert PACKET_CSV_HEADER[-2] == "traffic_class"
+    assert PACKET_CSV_HEADER[-1] == "measured_sinr_db"
+    # Rashed-Step 13.A-08-23-2026-end
 
 
 def test_packet_to_csv_row_reports_the_packets_own_traffic_class():
     p = _make_delivered("v1", created_at=0.0, latency=1000.0, traffic_class="voice")
     row = packet_to_csv_row(p, seed=1, technology="WiFi", node="AP 1")
-    assert row[-1] == "voice"
+    # Rashed-Step 13.A-08-23-2026-start
+    # row[-1] used to be traffic_class; now it's measured_sinr_db
+    # (unset here), so look traffic_class up by its header position
+    # instead of assuming it's the last column.
+    assert row[PACKET_CSV_HEADER.index("traffic_class")] == "voice"
+    # Rashed-Step 13.A-08-23-2026-end
     assert len(row) == len(PACKET_CSV_HEADER)
 
 
@@ -1375,6 +1391,166 @@ def test_nru_rate_adapt_state_is_per_link():
 # Rashed-Step 11.B-08-21-2026-end
 
 
+# Rashed-Step 13.A-08-23-2026-start
+"""
+Step 13.A unit tests: Packet.measured_sinr_db - the per-packet channel-
+quality logging field added ahead of the SINR-prediction work (see
+"Project details/Step 13.txt"). Covers the field's default and
+packet_to_csv_row()'s new trailing column directly, plus - since no
+existing test in this file drives send_frame()/send_frame_edca()/
+send_transmission() as an actual SimPy process, and that's the only way
+to prove the three real production call sites were wired correctly
+(not just that Packet/CSV plumbing works in isolation) - one real
+end-to-end test per call site, each exercised on both a guaranteed-
+success (very close link) and guaranteed-failure (absurdly far link)
+scenario, since "record SINR on success AND failure alike" was the
+whole point of the design decision (Step 13.txt, decision 1).
+"""
+
+
+def test_packet_measured_sinr_db_defaults_to_none():
+    p = Packet(packet_id="p1", source="a", destination="b", payload_bytes=100, header_bytes=40)
+    assert p.measured_sinr_db is None
+
+
+def test_packet_to_csv_row_includes_measured_sinr_db_when_set():
+    p = _make_delivered("p1", created_at=0.0, latency=100.0)
+    p.measured_sinr_db = 12.5
+    row = packet_to_csv_row(p, seed=1, technology="WiFi", node="AP 1")
+    assert row[PACKET_CSV_HEADER.index("measured_sinr_db")] == 12.5
+
+
+def test_packet_to_csv_row_blank_measured_sinr_db_when_unset():
+    p = _make_delivered("p1", created_at=0.0, latency=100.0)
+    row = packet_to_csv_row(p, seed=1, technology="WiFi", node="AP 1")
+    assert row[PACKET_CSV_HEADER.index("measured_sinr_db")] == ""
+
+
+class _NoAutoStartGnb(Gnb):
+    """Same purpose as _NoAutoStartWiFi above (Step 10.B) - Gnb.__init__
+    also does env.process(self.start()) unconditionally, which would
+    otherwise run concurrently with whatever a test drives directly via
+    env.process(g.send_transmission())/env.run(until=...)."""
+    def start(self):
+        return
+        yield  # pragma: no cover - never reached, makes this a generator
+
+
+def _make_test_sinr_wifi(distance_m=1.0):
+    """Minimal WiFi construction for driving send_frame()/
+    send_frame_edca() as a real SimPy process. distance_m controls
+    whether the link is expected to succeed (small, e.g. 1.0) or fail
+    (huge, e.g. 1e9) so both branches of the "record SINR regardless of
+    outcome" decision get exercised."""
+    env = simpy.Environment()
+    channel = Channel(
+        tx_queue=simpy.PriorityResource(env, capacity=1),
+        tx_lock=simpy.Resource(env, capacity=1),
+        n_of_stations=1,
+        n_of_gNB=0,
+        backoffs={},
+        airtime_data={},
+        airtime_control={},
+        airtime_data_NR={},
+        airtime_control_NR={},
+    )
+    channel.airtime_data["AP 1"] = 0
+    channel.airtime_control["AP 1"] = 0
+
+    class _FakeSta:
+        name = "STA 1-1"
+        def current_pos(self):
+            return (distance_m, 0.0)
+
+    ap = _NoAutoStartWiFi(
+        env, "AP 1", channel, (0.0, 0.0), [_FakeSta()], Config(qos_enabled=False),
+        traffic_config=TrafficConfig(mode="saturated"),
+    )
+    return env, ap
+
+
+def test_wifi_legacy_send_frame_records_measured_sinr_on_success():
+    env, ap = _make_test_sinr_wifi(distance_m=1.0)
+    packet = ap._make_packet()
+    ap.frame_to_send = ap.generate_new_frame(packet)
+    ap.frame_to_send.packet = packet
+    proc = env.process(ap.send_frame())
+    env.run(until=proc)
+    assert packet.measured_sinr_db is not None
+    assert isinstance(packet.measured_sinr_db, float)
+    assert packet.status == "DELIVERED"  # close-range sanity check this really was a success
+
+
+def test_wifi_legacy_send_frame_records_measured_sinr_on_failure():
+    env, ap = _make_test_sinr_wifi(distance_m=1e9)
+    packet = ap._make_packet()
+    ap.frame_to_send = ap.generate_new_frame(packet)
+    ap.frame_to_send.packet = packet
+    proc = env.process(ap.send_frame())
+    env.run(until=proc)
+    assert packet.measured_sinr_db is not None
+    assert isinstance(packet.measured_sinr_db, float)
+    # Not asserting packet.status here on purpose - a single failed
+    # attempt gets retried (status stays PENDING, retry_count grows) or
+    # replaced (if the retry limit is hit) rather than becoming DROPPED
+    # on THIS Packet instance necessarily - retry bookkeeping is
+    # covered by earlier steps' tests, not this one's concern.
+
+
+def test_wifi_edca_send_frame_edca_records_measured_sinr():
+    env, ap = _make_test_edca_wifi()
+    ap._refresh_ac_frame("voice")
+    frame = ap.ac_frame_to_send["voice"]
+    proc = env.process(ap.send_frame_edca("voice"))
+    env.run(until=proc)
+    assert frame.packet.measured_sinr_db is not None
+    assert isinstance(frame.packet.measured_sinr_db, float)
+
+
+def _make_test_sinr_gnb(distance_m=1.0):
+    env = simpy.Environment()
+    channel = Channel(
+        tx_queue=simpy.PriorityResource(env, capacity=1),
+        tx_lock=simpy.Resource(env, capacity=1),
+        n_of_stations=0,
+        n_of_gNB=1,
+        backoffs={},
+        airtime_data={},
+        airtime_control={},
+        airtime_data_NR={},
+        airtime_control_NR={},
+    )
+    channel.airtime_data_NR["Gnb 1"] = 0
+    channel.airtime_control_NR["Gnb 1"] = 0
+
+    class _FakeUe:
+        name = "UE 1-1"
+        def current_pos(self):
+            return (distance_m, 0.0)
+
+    g = _NoAutoStartGnb(env, "Gnb 1", channel, (0.0, 0.0), [_FakeUe()], Config_NR())
+    return env, g
+
+
+def test_nru_send_transmission_records_measured_sinr_on_success():
+    env, g = _make_test_sinr_gnb(distance_m=1.0)
+    proc = env.process(g.send_transmission())
+    env.run(until=proc)
+    packet = g.transmission_to_send.packet
+    assert packet.measured_sinr_db is not None
+    assert isinstance(packet.measured_sinr_db, float)
+
+
+def test_nru_send_transmission_records_measured_sinr_on_failure():
+    env, g = _make_test_sinr_gnb(distance_m=1e9)
+    proc = env.process(g.send_transmission())
+    env.run(until=proc)
+    packet = g.transmission_to_send.packet
+    assert packet.measured_sinr_db is not None
+    assert isinstance(packet.measured_sinr_db, float)
+# Rashed-Step 13.A-08-23-2026-end
+
+
 # Rashed-Step 8.A-08-06-2026-start
 if __name__ == "__main__":
     tests = [
@@ -1475,6 +1651,16 @@ if __name__ == "__main__":
         test_nru_rate_adapt_required_sinr_db_tracks_last_measurement,
         test_nru_rate_adapt_state_is_per_link,
         # Rashed-Step 11.B-08-21-2026-end
+        # Rashed-Step 13.A-08-23-2026-start
+        test_packet_measured_sinr_db_defaults_to_none,
+        test_packet_to_csv_row_includes_measured_sinr_db_when_set,
+        test_packet_to_csv_row_blank_measured_sinr_db_when_unset,
+        test_wifi_legacy_send_frame_records_measured_sinr_on_success,
+        test_wifi_legacy_send_frame_records_measured_sinr_on_failure,
+        test_wifi_edca_send_frame_edca_records_measured_sinr,
+        test_nru_send_transmission_records_measured_sinr_on_success,
+        test_nru_send_transmission_records_measured_sinr_on_failure,
+        # Rashed-Step 13.A-08-23-2026-end
     ]
     passed = 0
     failed = 0

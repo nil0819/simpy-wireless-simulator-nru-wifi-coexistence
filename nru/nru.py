@@ -704,6 +704,11 @@ class Gnb:
             # Rashed-Step 4.D_3-01-29-2026-start
             #was_sent = self.check_collision()
             sinr = self.channel.sinr_db(active)
+            # Rashed-Step 13.A-08-23-2026-start
+            # Log measured SINR on the packet itself, success or
+            # failure alike - see Packet.measured_sinr_db docstring.
+            self.transmission_to_send.packet.measured_sinr_db = sinr
+            # Rashed-Step 13.A-08-23-2026-end
             # Rashed-Step 5.D-02-06-2026-start
             required_sinr = self.required_sinr_db()
             log(self, f"TX->RX SINR(dB) = {sinr:.2f} dB, required (MCS {self.config_nr.mcs}) = {required_sinr:.2f} dB")

@@ -169,6 +169,20 @@ class Packet:
     # zero-risk choice regardless).
     traffic_class: str = "best_effort"
     # Rashed-Step 10.A-08-07-2026-end
+    # Rashed-Step 13.A-08-23-2026-start
+    # Channel quality (SINR, dB) measured by the TRANSMITTER at the
+    # instant this packet's transmission attempt was checked for
+    # success/failure (channel.sinr_db(...) inside wifi.py's
+    # send_frame()/send_frame_edca() and nru.py's send_transmission()).
+    # None until that point (queued/never-attempted packets), and also
+    # recorded on FAILED attempts, not just delivered ones - a failed
+    # attempt's SINR is real channel-quality information too, and only
+    # logging successes would bias any downstream analysis/training
+    # toward "good link" conditions. Added at the END of the dataclass,
+    # same zero-risk convention as traffic_class (Step 10.A) - no
+    # existing positional Packet(...) call site is affected.
+    measured_sinr_db: Optional[float] = None
+    # Rashed-Step 13.A-08-23-2026-end
 
     def total_bytes(self) -> int:
         return self.payload_bytes + self.header_bytes
@@ -692,6 +706,12 @@ PACKET_CSV_HEADER = [
     # silent index misalignment).
     "traffic_class",
     # Rashed-Step 10.E-08-11-2026-end
+    # Rashed-Step 13.A-08-23-2026-start
+    # Same "append at the end" convention as traffic_class above - any
+    # offline script reading columns by fixed position keeps working;
+    # only a script assuming a fixed total column count needs updating.
+    "measured_sinr_db",
+    # Rashed-Step 13.A-08-23-2026-end
 ]
 
 
@@ -720,6 +740,9 @@ def packet_to_csv_row(packet: Packet, seed, technology: str, node: str) -> list:
         # Rashed-Step 10.E-08-11-2026-start
         packet.traffic_class,
         # Rashed-Step 10.E-08-11-2026-end
+        # Rashed-Step 13.A-08-23-2026-start
+        packet.measured_sinr_db if packet.measured_sinr_db is not None else "",
+        # Rashed-Step 13.A-08-23-2026-end
     ]
 
 
