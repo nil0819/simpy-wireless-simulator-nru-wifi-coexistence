@@ -42,6 +42,18 @@ _PATTERNS = {
     "all_eff": r"All efficieny: ([\d.]+)",
     "fairness": r"fairness: ([\d.]+)",
     "joint": r"joint: ([\d.]+)",
+    # Rashed-Step 14.A-08-28-2026-start
+    # Matches simulation.py's new per-technology throughput/delay lines
+    # (see that file's Step 14.A block) - avg_latency_us can print as
+    # "None" when a technology delivered zero packets, so these patterns
+    # accept either a float or the literal word None; _post-process below
+    # converts "None" text to a real None instead of leaving it as a
+    # string (every other key in this dict is float-or-None already).
+    "wifi_throughput_mbps": r"Wifi packet throughput \(Mbps\): ([\d.]+)",
+    "wifi_avg_latency_us": r"Wifi packet avg latency \(us\): ([\d.]+|None)",
+    "nru_throughput_mbps": r"NRU packet throughput \(Mbps\): ([\d.]+)",
+    "nru_avg_latency_us": r"NRU packet avg latency \(us\): ([\d.]+|None)",
+    # Rashed-Step 14.A-08-28-2026-end
 }
 _SUCC_FAIL_WIFI = r"succ WiFi: (\d+) fail WiFi: (\d+)"
 _SUCC_FAIL_NRU = r"succ NRU: (\d+) fail NRU: (\d+)"
@@ -92,7 +104,17 @@ def run_scenario(argv: List[str], suppress_logging: bool = True) -> Dict[str, Op
     result: Dict[str, Optional[float]] = {}
     for key, pattern in _PATTERNS.items():
         matches = re.findall(pattern, output)
-        result[key] = float(matches[-1]) if matches else None
+        # Rashed-Step 14.A-08-28-2026-start
+        # wifi_avg_latency_us/nru_avg_latency_us can legitimately match the
+        # literal text "None" (a technology delivered zero packets this
+        # run - see compute_packet_stats()'s own avg_latency_us=None case).
+        # Every other existing key's pattern only ever matches digits, so
+        # this check is a no-op for them.
+        if matches and matches[-1] == "None":
+            result[key] = None
+        # Rashed-Step 14.A-08-28-2026-end
+        else:
+            result[key] = float(matches[-1]) if matches else None
 
     m = re.findall(_SUCC_FAIL_WIFI, output)
     if m:

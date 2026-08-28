@@ -434,6 +434,33 @@ def run_simulation(
     nru_packets = [p for g in gnbs for p in g.packet_log]
     wifi_pkt_stats = compute_packet_stats(wifi_packets)
     nru_pkt_stats = compute_packet_stats(nru_packets)
+
+    # Rashed-Step 14.A-08-28-2026-start
+    # Per-technology GOODPUT throughput (Mbps) and avg delay (us), printed
+    # to stdout so model/runner.py's existing stdout-scraping run_scenario()
+    # can pick them up - same convention as the "Wifi/Gnb occupancy
+    # (Normalized)"/"fairness" lines below, added for the new analysis/
+    # module's WiFi-vs-NR-U performance-comparison figure (channel
+    # occupancy was already available; throughput/delay were not - delay
+    # was computed as wifi_pkt_stats/nru_pkt_stats["avg_latency_us"] but
+    # never printed, and throughput wasn't computed anywhere at all).
+    # GOODPUT, not raw attempted-bytes rate: only DELIVERED packets count,
+    # matching what "channel_efficiency" (data-only airtime, excluding
+    # control frames and failed attempts) already represents for
+    # occupancy - so this is throughput's natural counterpart, not a new,
+    # inconsistent definition. Purely additive - two new printed lines,
+    # nothing existing changes, so this is byte-identical for every
+    # caller that doesn't look for these two new lines.
+    wifi_delivered_bytes = sum(p.total_bytes() for p in wifi_packets if p.status == "DELIVERED")
+    nru_delivered_bytes = sum(p.total_bytes() for p in nru_packets if p.status == "DELIVERED")
+    wifi_throughput_mbps = (wifi_delivered_bytes * 8) / (simulation_time * 1e6)
+    nru_throughput_mbps = (nru_delivered_bytes * 8) / (simulation_time * 1e6)
+    print(f'Wifi packet throughput (Mbps): {wifi_throughput_mbps}')
+    print(f'Wifi packet avg latency (us): {wifi_pkt_stats["avg_latency_us"]}')
+    print(f'NRU packet throughput (Mbps): {nru_throughput_mbps}')
+    print(f'NRU packet avg latency (us): {nru_pkt_stats["avg_latency_us"]}')
+    # Rashed-Step 14.A-08-28-2026-end
+
     # Rashed-Step 12.A-08-13-2026-start
     # No longer printed directly to stdout (see below, after every
     # section is computed) - collected into packet_report_sections
