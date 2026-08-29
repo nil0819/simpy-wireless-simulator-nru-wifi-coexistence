@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import matplotlib
 matplotlib.use("Agg")  # headless - this module never opens an interactive window
 import matplotlib.pyplot as plt
+import numpy as np
 
 GENERATED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated")
 os.makedirs(GENERATED_DIR, exist_ok=True)
@@ -177,3 +178,99 @@ def save_line_figure(
 
     return {"pdf": pdf_path, "jpg": jpg_path}
 # Rashed-Step 14.A-08-28-2026-end
+
+
+# Rashed-Step 13.F-08-29-2026-start
+# Consistent "baseline/heuristic" vs "ML-driven" color pair, reused
+# across BOTH ml/ performance-evaluation figures (prediction-accuracy
+# bar chart and PDR-comparison bar chart) so a reader learns the
+# mapping once: gray always means "the simple, non-learned baseline"
+# (persistence / last-measured-SINR heuristic), orange always means
+# "the trained model's prediction is driving the decision" (learned
+# SINR predictor / ML-driven rate adaptation). Orange (#ff7f0e) was
+# freed up by Step 14.G (it used to be "Wi-Fi (Long TXOP)"'s color,
+# before 14.G unified all Wi-Fi series onto navy) - reused here rather
+# than introducing a new hue, and it's unambiguous in these bar charts
+# since Wi-Fi/NR-U's navy/green never appear as bar colors themselves
+# (they're x-axis category labels here, not series).
+BASELINE_COLOR = "#7f7f7f"
+ML_COLOR = "#ff7f0e"
+BAR_STYLE: Dict[str, str] = {
+    "Persistence": BASELINE_COLOR,
+    "Heuristic": BASELINE_COLOR,
+    "Model": ML_COLOR,
+    "ML-Driven": ML_COLOR,
+}
+
+
+def save_bar_figure(
+    categories: Sequence[str],
+    series: Dict[str, Sequence[float]],
+    xlabel: str,
+    ylabel: str,
+    output_stem: str,
+    figsize=(8.0, 5.5),
+    value_fmt: str = "{:.2f}",
+    value_labels: bool = True,
+    bar_colors: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    """
+    Grouped bar chart - one group per category (x-axis), one bar per
+    (label, values) pair in `series` within each group, styled per
+    BAR_STYLE (falls back to matplotlib's default color cycle for any
+    label not in the registry). Same gridded/bordered/no-title/
+    PDF+JPG-at-300-DPI conventions as save_line_figure(), just for
+    categorical (not x-y line) comparisons - e.g. persistence vs a
+    trained model's MAE/RMSE, or a heuristic vs an ML-driven policy's
+    packet delivery ratio, across a handful of named scenarios.
+
+    Returns {"pdf": <path>, "jpg": <path>}.
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+
+    n_series = len(series)
+    x = np.arange(len(categories))
+    bar_width = 0.8 / max(n_series, 1)
+
+    for i, (label, values) in enumerate(series.items()):
+        color = (bar_colors or BAR_STYLE).get(label, None)
+        offset = (i - (n_series - 1) / 2) * bar_width
+        bars = ax.bar(
+            x + offset, values, width=bar_width * 0.92, label=label,
+            color=color, edgecolor="black", linewidth=1.0,
+        )
+        if value_labels:
+            for rect, v in zip(bars, values):
+                ax.annotate(
+                    value_fmt.format(v),
+                    xy=(rect.get_x() + rect.get_width() / 2, rect.get_height()),
+                    xytext=(0, 3), textcoords="offset points",
+                    ha="center", va="bottom", fontsize=9,
+                )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(categories, fontsize=FONTSIZE_TICK)
+    ax.set_xlabel(xlabel, fontsize=FONTSIZE_LABEL)
+    ax.set_ylabel(ylabel, fontsize=FONTSIZE_LABEL)
+    ax.tick_params(axis="y", labelsize=FONTSIZE_TICK)
+
+    ax.grid(True, axis="y", which="major", linestyle=":", linewidth=0.8, alpha=0.7)
+    ax.set_axisbelow(True)
+
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_linewidth(1.2)
+        spine.set_color("black")
+
+    ax.legend(fontsize=FONTSIZE_LEGEND, framealpha=0.9, edgecolor="black")
+
+    fig.tight_layout()
+
+    pdf_path = os.path.join(GENERATED_DIR, f"{output_stem}.pdf")
+    jpg_path = os.path.join(GENERATED_DIR, f"{output_stem}.jpg")
+    fig.savefig(pdf_path, dpi=DPI, bbox_inches="tight")
+    fig.savefig(jpg_path, dpi=DPI, bbox_inches="tight", format="jpg")
+    plt.close(fig)
+
+    return {"pdf": pdf_path, "jpg": jpg_path}
+# Rashed-Step 13.F-08-29-2026-end
