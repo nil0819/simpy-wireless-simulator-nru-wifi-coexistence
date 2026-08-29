@@ -16,6 +16,22 @@ are computed and printed).
 
 Run standalone: `python -m analysis.wifi_nru_performance_comparison` from
 the repo root, or `python analysis/wifi_nru_performance_comparison.py`.
+
+# Rashed-Step 14.E-08-29-2026-start
+LONG-TXOP WI-FI VARIANT (added 2026-08-29, additive - default behavior
+above is byte-identical when wifi_packet_size_bytes is left at None
+everywhere): same long-TXOP question as Steps 14.C/14.D.1, now asked of
+this w=1..6 sweep - what happens to occupancy/throughput/delay/fairness
+across the sweep if Wi-Fi holds the channel for a comparably long TXOP
+(36286-byte frame via aggregation, ~5.4ms, matching real 802.11ax's
+TXOP limit) instead of its ~242us single-frame default? _run_one() and
+generate() both gained an optional wifi_packet_size_bytes param (plus
+output_stem/title_suffix/wifi_series_label for generate(), so the same
+sweep logic produces a second set of 4 figures instead of duplicating
+it), following the exact same extension pattern as
+nru_sensing_region_impact.py (14.C) and
+nru_wifi_mobility_transition.py (14.D.1).
+# Rashed-Step 14.E-08-29-2026-end
 """
 import os
 import sys
@@ -29,10 +45,15 @@ from analysis.plot_utils import save_line_figure
 
 W_VALUES = list(range(1, 7))  # 1..6 coexisting Wi-Fi APs, gNB count fixed at 1
 
+# Rashed-Step 14.E-08-29-2026-start
+WIFI_LONG_TXOP_PACKET_SIZE_BYTES = 36286   # matches Step 14.C/14.D.1's long-TXOP variant
+# Rashed-Step 14.E-08-29-2026-end
+
 
 def _run_one(w: int, Wo: int, sim_time_s: float, seed: int, ap_cluster_radius: float,
              ap_pos: str, gnb_pos: str, sta_radius: float, ue_radius: float,
-             area_w: float, area_h: float, mcot_ms: int) -> Dict:
+             area_w: float, area_h: float, mcot_ms: int,
+             wifi_packet_size_bytes: "int | None" = None) -> Dict:
     """
     Runs one w-AP + 1-gNB saturated scenario (same fixed-CW/clustered-
     placement convention as model.compare.compare_dtmc(), reused directly
@@ -57,15 +78,24 @@ def _run_one(w: int, Wo: int, sim_time_s: float, seed: int, ap_cluster_radius: f
         "--nru_cw_min", str(Wo - 1), "--nru_cw_max", str(Wo - 1),
         "--mcot", str(mcot_ms),
     ]
+    # Rashed-Step 14.E-08-29-2026-start
+    if wifi_packet_size_bytes is not None:
+        argv += ["--wifi-packet-size-bytes", str(wifi_packet_size_bytes)]
+    # Rashed-Step 14.E-08-29-2026-end
     return run_scenario(argv)
 
 
-def generate(w_values=W_VALUES, sim_time_s: float = 30.0, seed: int = 1):
+def generate(w_values=W_VALUES, sim_time_s: float = 30.0, seed: int = 1,
+             wifi_packet_size_bytes: "int | None" = None,
+             output_stem_prefix: str = "wifi_nru",
+             title_suffix: str = "",
+             wifi_series_label: str = "Wi-Fi"):
     results = [
         _run_one(
             w=w, Wo=32, sim_time_s=sim_time_s, seed=seed, ap_cluster_radius=2.0,
             ap_pos="0,0", gnb_pos="10,0", sta_radius=3.0, ue_radius=3.0,
             area_w=20.0, area_h=20.0, mcot_ms=6,
+            wifi_packet_size_bytes=wifi_packet_size_bytes,
         )
         for w in w_values
     ]
@@ -75,37 +105,37 @@ def generate(w_values=W_VALUES, sim_time_s: float = 30.0, seed: int = 1):
     figures["occupancy"] = save_line_figure(
         x=w_values,
         series={
-            "Wi-Fi": [r["wifi_occ"] for r in results],
+            wifi_series_label: [r["wifi_occ"] for r in results],
             "NR-U":  [r["gnb_occ"] for r in results],
         },
         xlabel="Number of coexisting Wi-Fi APs (w)",
         ylabel="Normalized channel occupancy",
-        title="Wi-Fi vs. NR-U: Channel Occupancy",
-        output_stem="wifi_nru_channel_occupancy",
+        title=title_suffix,
+        output_stem=f"{output_stem_prefix}_channel_occupancy",
     )
 
     figures["throughput"] = save_line_figure(
         x=w_values,
         series={
-            "Wi-Fi": [r["wifi_throughput_mbps"] for r in results],
+            wifi_series_label: [r["wifi_throughput_mbps"] for r in results],
             "NR-U":  [r["nru_throughput_mbps"] for r in results],
         },
         xlabel="Number of coexisting Wi-Fi APs (w)",
         ylabel="Goodput throughput (Mbps)",
-        title="Wi-Fi vs. NR-U: Throughput",
-        output_stem="wifi_nru_throughput",
+        title=title_suffix,
+        output_stem=f"{output_stem_prefix}_throughput",
     )
 
     figures["delay"] = save_line_figure(
         x=w_values,
         series={
-            "Wi-Fi": [r["wifi_avg_latency_us"] for r in results],
+            wifi_series_label: [r["wifi_avg_latency_us"] for r in results],
             "NR-U":  [r["nru_avg_latency_us"] for r in results],
         },
         xlabel="Number of coexisting Wi-Fi APs (w)",
         ylabel="Average packet delay (µs)",
-        title="Wi-Fi vs. NR-U: Delay",
-        output_stem="wifi_nru_delay",
+        title=title_suffix,
+        output_stem=f"{output_stem_prefix}_delay",
     )
 
     # Fairness (simulation.py's Jain-style index over WiFi/NR-U normalized
@@ -119,19 +149,19 @@ def generate(w_values=W_VALUES, sim_time_s: float = 30.0, seed: int = 1):
         },
         xlabel="Number of coexisting Wi-Fi APs (w)",
         ylabel="Jain fairness index (Wi-Fi vs. NR-U occupancy)",
-        title="Wi-Fi/NR-U Coexistence Fairness",
-        output_stem="wifi_nru_fairness",
+        title=title_suffix,
+        output_stem=f"{output_stem_prefix}_fairness",
     )
 
     return results, figures
 
 
-if __name__ == "__main__":
-    results, figures = generate()
+def _print_report(results, figures, w_values, label):
+    print(f"--- {label} ---")
     print(f"{'w':>2} | {'WiFi occ':>9} {'NRU occ':>9} | {'WiFi Mbps':>10} {'NRU Mbps':>10} | "
           f"{'WiFi us':>10} {'NRU us':>10} | {'fair':>6}")
     print("-" * 90)
-    for r, w in zip(results, W_VALUES):
+    for r, w in zip(results, w_values):
         wl = r["wifi_avg_latency_us"]
         nl = r["nru_avg_latency_us"]
         wl_s = f"{wl:>10.1f}" if wl is not None else f"{'N/A':>10}"
@@ -143,4 +173,20 @@ if __name__ == "__main__":
     for name, paths in figures.items():
         print(f"[{name}] Saved: {paths['pdf']}")
         print(f"[{name}] Saved: {paths['jpg']}")
+    print()
+
+
+if __name__ == "__main__":
+    results, figures = generate()
+    _print_report(results, figures, W_VALUES, label="short-TXOP Wi-Fi (default, 242us)")
+
+    # Rashed-Step 14.E-08-29-2026-start
+    results_long, figures_long = generate(
+        wifi_packet_size_bytes=WIFI_LONG_TXOP_PACKET_SIZE_BYTES,
+        output_stem_prefix="wifi_nru_long_txop",
+        title_suffix="Long Wi-Fi TXOP (~5.4ms via 36286-byte frame)",
+        wifi_series_label="Wi-Fi (Long TXOP)",
+    )
+    _print_report(results_long, figures_long, W_VALUES, label="long-TXOP Wi-Fi (5.4ms via 36286-byte frame)")
+    # Rashed-Step 14.E-08-29-2026-end
 # Rashed-Step 14.A-08-28-2026-end

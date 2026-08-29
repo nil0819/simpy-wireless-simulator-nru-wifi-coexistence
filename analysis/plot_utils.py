@@ -114,7 +114,12 @@ def save_line_figure(
 
     ax.set_xlabel(xlabel, fontsize=FONTSIZE_LABEL)
     ax.set_ylabel(ylabel, fontsize=FONTSIZE_LABEL)
-    ax.set_title(title, fontsize=FONTSIZE_TITLE)
+    # Rashed-Step 14.F-08-29-2026-start
+    # Rashed asked to drop titles from every figure in this module (the
+    # paper will caption each figure itself) - `title` is still accepted
+    # for backward compatibility with every caller's signature/tests, but
+    # is intentionally never rendered on the axes anymore.
+    # Rashed-Step 14.F-08-29-2026-end
     ax.tick_params(axis="both", labelsize=FONTSIZE_TICK)
 
     # Rashed-Step 14.B-08-28-2026-start
