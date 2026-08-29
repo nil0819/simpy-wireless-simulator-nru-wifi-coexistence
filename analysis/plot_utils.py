@@ -26,19 +26,30 @@ os.makedirs(GENERATED_DIR, exist_ok=True)
 # doesn't have to re-learn the legend each time. Model-vs-simulated pairs
 # share a color and differ by linestyle (dashed=model, solid=simulated)
 # and marker, per the "different marker for each technology" request.
+# Rashed-Step 14.G-08-29-2026-start
+# Rashed's fixed brand colors (2026-08-29): every Wi-Fi series uses
+# #111184 (navy), every NR-U series uses #4b7248 (green), regardless of
+# variant (Model/Simulated/Long TXOP) - variants differentiate by
+# marker/linestyle only now, not color, so "Wi-Fi" always reads as the
+# same color across every figure in this module. Non-technology series
+# (Fairness Index, Combined) are intentionally left on their own
+# colors - Rashed's request was specifically "for NR-U"/"for Wi-Fi".
+WIFI_COLOR = "#111184"
+NRU_COLOR = "#4b7248"
+# Rashed-Step 14.G-08-29-2026-end
 SERIES_STYLE: Dict[str, dict] = {
-    "Wi-Fi (Model)":     dict(color="#1f77b4", marker="o", linestyle="--"),
-    "Wi-Fi (Simulated)": dict(color="#1f77b4", marker="s", linestyle="-"),
-    "NR-U (Model)":      dict(color="#d62728", marker="^", linestyle="--"),
-    "NR-U (Simulated)":  dict(color="#d62728", marker="D", linestyle="-"),
-    "Wi-Fi":             dict(color="#1f77b4", marker="s", linestyle="-"),
-    "NR-U":              dict(color="#d62728", marker="D", linestyle="-"),
+    "Wi-Fi (Model)":     dict(color=WIFI_COLOR, marker="o", linestyle="--"),
+    "Wi-Fi (Simulated)": dict(color=WIFI_COLOR, marker="s", linestyle="-"),
+    "NR-U (Model)":      dict(color=NRU_COLOR, marker="^", linestyle="--"),
+    "NR-U (Simulated)":  dict(color=NRU_COLOR, marker="D", linestyle="-"),
+    "Wi-Fi":             dict(color=WIFI_COLOR, marker="s", linestyle="-"),
+    "NR-U":              dict(color=NRU_COLOR, marker="D", linestyle="-"),
     "Fairness Index":    dict(color="#2ca02c", marker="^", linestyle="-"),
     # Rashed-Step 14.B-08-28-2026-start
     "Combined (Wi-Fi + NR-U)": dict(color="#7f7f7f", marker="x", linestyle="-"),
     # Rashed-Step 14.B-08-28-2026-end
     # Rashed-Step 14.C-08-28-2026-start
-    "Wi-Fi (Long TXOP)": dict(color="#ff7f0e", marker="^", linestyle="-"),
+    "Wi-Fi (Long TXOP)": dict(color=WIFI_COLOR, marker="^", linestyle="-"),
     # Rashed-Step 14.C-08-28-2026-end
 }
 
