@@ -317,3 +317,72 @@ class WaypointMobility:
         return self._seg_start_pos
         # Rashed-Step 5.H-02-06-2026-end
 # Rashed-Step 5.G-02-06-2026-end
+
+
+# Rashed-Step 14.D-08-28-2026-start
+class LinearMobility:
+    """
+    Deterministic directed mobility: moves in a straight line from
+    start_pos to end_pos at whatever constant speed covers that distance
+    in exactly duration_s seconds, then holds at end_pos indefinitely.
+
+    Unlike WaypointMobility (random destinations, indefinite roaming),
+    this is for experiments that need a REPRODUCIBLE, precisely-timed
+    transition - e.g. "start outside a sensing-range crossover distance,
+    arrive at a specific distance at a specific simulated time" (Step
+    14.D's mobility-transition experiment) - something a random-waypoint
+    model can't guarantee at all.
+
+    Same pos_now() -> Pos interface as WaypointMobility (both are used
+    interchangeably wherever a node's `mobility` attribute is read - see
+    Gnb.current_pos()/NrUE.current_pos()), so this is a drop-in
+    alternative, not a replacement - WaypointMobility is untouched.
+    """
+
+    def __init__(self, env: simpy.Environment, start_pos: Pos, end_pos: Pos, duration_s: float):
+        self.env = env
+        self.start_pos = start_pos
+        self.end_pos = end_pos
+        # duration_s<=0 means "teleport immediately to end_pos" (a 0-length
+        # move), not an error - matches WaypointMobility's speed_mps<=0
+        # convention of degenerating to a well-defined static case rather
+        # than raising or dividing by zero.
+        self.duration_us = max(duration_s, 0.0) * 1e6
+        self._start_us = env.now
+
+    def pos_now(self) -> Pos:
+        if self.duration_us <= 0.0:
+            return self.end_pos
+        elapsed_us = self.env.now - self._start_us
+        if elapsed_us >= self.duration_us:
+            return self.end_pos
+        frac = elapsed_us / self.duration_us
+        return (
+            self.start_pos[0] + frac * (self.end_pos[0] - self.start_pos[0]),
+            self.start_pos[1] + frac * (self.end_pos[1] - self.start_pos[1]),
+        )
+
+
+class RelativeMobility:
+    """
+    Rigidly tracks another mobility source with a fixed offset - e.g. a
+    UE that should always stay exactly offset meters from its serving
+    gNB, however the gNB itself moves, so their link quality never
+    depends on the gNB's mobility at all (Step 14.D's "gNB and UE must
+    always stay connected" requirement).
+
+    base: either an object with its own pos_now() (e.g. a LinearMobility
+    or WaypointMobility instance - tracks that source's CURRENT, possibly
+    moving position), or a plain static Pos tuple (for a gNB that has no
+    mobility object at all, i.e. speed_mps<=0/purely static) - handled
+    uniformly so callers don't need to special-case "is the base moving".
+    """
+
+    def __init__(self, base, offset: Pos):
+        self.base = base
+        self.offset = offset
+
+    def pos_now(self) -> Pos:
+        base_pos = self.base.pos_now() if hasattr(self.base, "pos_now") else self.base
+        return (base_pos[0] + self.offset[0], base_pos[1] + self.offset[1])
+# Rashed-Step 14.D-08-28-2026-end

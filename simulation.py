@@ -17,6 +17,9 @@ from common.common_phy import check_eirp_compliance
 # Rashed-Step 5.F-02-06-2026-end
 # Rashed-Step 5.G-02-06-2026-start
 from common.common_phy import WaypointMobility
+# Rashed-Step 14.D-08-28-2026-start
+from common.common_phy import LinearMobility, RelativeMobility
+# Rashed-Step 14.D-08-28-2026-end
 # Rashed-Step 5.G-02-06-2026-end
 # Rashed-Step 8.G-08-06-2026-start
 from common.packet import compute_packet_stats
@@ -110,6 +113,31 @@ def run_simulation(
         # common/packet.py's export_packets_csv()/PACKET_CSV_HEADER.
         export_packets_csv_path: Optional[str] = None,
         # Rashed-Step 9.D-08-07-2026-end
+        # Rashed-Step 14.D-08-28-2026-start
+        # Deterministic directed gNB mobility - an alternative to the
+        # random-waypoint gnb_mobility_speed_mps above, for experiments
+        # that need a REPRODUCIBLE, precisely-timed transition (e.g.
+        # "start outside a sensing-range crossover distance, arrive at a
+        # specific distance at a specific simulated time" - see
+        # common.common_phy.LinearMobility's docstring). None (default)
+        # = completely unused, byte-identical to every pre-14.D run.
+        # Takes precedence over gnb_mobility_speed_mps when both are set
+        # (singleRun.py's CLI guards against setting both, but this
+        # function itself doesn't refuse it - the precedence is just
+        # this straightforward "linear wins if given" rule).
+        gnb_mobility_linear_target: Optional[Pos] = None,
+        gnb_mobility_linear_duration_s: float = 0.0,
+        # UE rigidly follows the gNB's CURRENT position (whatever moves
+        # it - linear or waypoint or fully static) plus this fixed
+        # offset, instead of getting its own independent mobility/
+        # placement. None (default) = unused, byte-identical to every
+        # pre-14.D run (UE keeps its existing rand_pos_near(gnb_pos,
+        # ue_radius) placement + optional independent ue_mobility_speed_
+        # mps roaming). Guarantees the gNB-UE distance never changes
+        # regardless of how the gNB moves - see common.common_phy.
+        # RelativeMobility's docstring.
+        ue_follow_gnb_offset: Optional[Pos] = None,
+        # Rashed-Step 14.D-08-28-2026-end
 ):
     random.seed(seed)
     environment = simpy.Environment()
@@ -262,6 +290,13 @@ def run_simulation(
             gnb_mobility = WaypointMobility(environment, area_w, area_h,
                                              gnb_mobility_speed_mps, mobility_pause_s, gnb_pos)
         # Rashed-Step 5.G-02-06-2026-end
+        # Rashed-Step 14.D-08-28-2026-start
+        # Directed linear mobility takes precedence over the random-
+        # waypoint speed above when given (see this param's docstring).
+        if gnb_mobility_linear_target is not None:
+            gnb_mobility = LinearMobility(environment, gnb_pos, gnb_mobility_linear_target,
+                                           gnb_mobility_linear_duration_s)
+        # Rashed-Step 14.D-08-28-2026-end
 
         ues_for_gnb = []
         for k in range(1, nr_ues_per_gnb + 1):
@@ -272,6 +307,21 @@ def run_simulation(
                 ue_mobility = WaypointMobility(environment, area_w, area_h,
                                                 ue_mobility_speed_mps, mobility_pause_s, ue_pos)
             # Rashed-Step 5.G-02-06-2026-end
+            # Rashed-Step 14.D-08-28-2026-start
+            # UE rigidly follows the gNB's CURRENT position (whichever
+            # mobility - or lack of one - it has) instead of getting its
+            # own independent placement/mobility - takes precedence over
+            # ue_mobility_speed_mps above when given, same "linear/
+            # coupled wins" precedence as the gNB's own override.
+            # gnb_mobility is None here only when the gNB is fully static
+            # (no linear target AND speed<=0) - RelativeMobility handles
+            # a plain static Pos base directly (see its docstring), so
+            # this works whether the gNB moves or not.
+            if ue_follow_gnb_offset is not None:
+                ue_pos = (gnb_pos[0] + ue_follow_gnb_offset[0], gnb_pos[1] + ue_follow_gnb_offset[1])
+                ue_mobility = RelativeMobility(gnb_mobility if gnb_mobility is not None else gnb_pos,
+                                                ue_follow_gnb_offset)
+            # Rashed-Step 14.D-08-28-2026-end
             ue = NrUE(
                 name=f"UE {i}-{k}",
                 # Rashed-Step 5.A-02-06-2026-start

@@ -16,6 +16,14 @@ lool.csv
 ml/data/
 # Rashed-Step 13.B-08-23-2026-end
 
+# Rashed-Step 14.D-08-29-2026-start
+# Intermediate per-chunk packet CSVs for analysis/
+# nru_wifi_mobility_transition.py's chunked 200s run - large (~45MB),
+# fully reproducible via run_all_chunks(), not worth committing.
+analysis/generated/_mobility_chunks/
+analysis/generated/_mobility_chunks_long_txop/
+# Rashed-Step 14.D-08-29-2026-end
+
 # OS
 .DS_Store
 

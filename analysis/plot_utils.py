@@ -10,7 +10,7 @@ figure this module produces), a legend, and high-resolution PDF+JPG
 output into analysis/generated/.
 """
 import os
-from typing import Dict, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import matplotlib
 matplotlib.use("Agg")  # headless - this module never opens an interactive window
@@ -34,6 +34,12 @@ SERIES_STYLE: Dict[str, dict] = {
     "Wi-Fi":             dict(color="#1f77b4", marker="s", linestyle="-"),
     "NR-U":              dict(color="#d62728", marker="D", linestyle="-"),
     "Fairness Index":    dict(color="#2ca02c", marker="^", linestyle="-"),
+    # Rashed-Step 14.B-08-28-2026-start
+    "Combined (Wi-Fi + NR-U)": dict(color="#7f7f7f", marker="x", linestyle="-"),
+    # Rashed-Step 14.B-08-28-2026-end
+    # Rashed-Step 14.C-08-28-2026-start
+    "Wi-Fi (Long TXOP)": dict(color="#ff7f0e", marker="^", linestyle="-"),
+    # Rashed-Step 14.C-08-28-2026-end
 }
 
 LINEWIDTH = 2.2
@@ -55,6 +61,11 @@ def save_line_figure(
     output_stem: str,
     x_ticks_as_int: bool = True,
     figsize=(7.5, 5.5),
+    # Rashed-Step 14.B-08-28-2026-start
+    xscale: str = "linear",
+    hlines: Optional[List[Tuple[float, str]]] = None,
+    vlines: Optional[List[Tuple[float, str]]] = None,
+    # Rashed-Step 14.B-08-28-2026-end
 ) -> Dict[str, str]:
     """
     Draws one gridded, bordered line plot - one line per (label, y-values)
@@ -67,6 +78,16 @@ def save_line_figure(
       "occupancy_model_vs_simulation" ->
         analysis/generated/occupancy_model_vs_simulation.pdf
         analysis/generated/occupancy_model_vs_simulation.jpg
+
+    xscale: "linear" (default, unchanged from before Step 14.B) or "log" -
+      useful for a wide-range distance sweep (e.g. the sensing-region
+      figure) where a linear axis would crowd every interesting point
+      into the first few pixels.
+    hlines/vlines: optional list of (value, label) reference lines drawn
+      as thin dashed lines with their own legend entries (e.g. a y=1.0
+      "shared channel" reference, or vertical markers at an
+      analytically-derived sensing-range crossover distance) - purely
+      additive, no effect on any existing caller that doesn't pass them.
 
     Returns {"pdf": <path>, "jpg": <path>}.
     """
@@ -84,10 +105,22 @@ def save_line_figure(
             **style,
         )
 
+    # Rashed-Step 14.B-08-28-2026-start
+    for y_val, y_label in (hlines or []):
+        ax.axhline(y_val, color="black", linestyle=":", linewidth=1.4, alpha=0.8, label=y_label)
+    for x_val, x_label in (vlines or []):
+        ax.axvline(x_val, color="#9467bd", linestyle="-.", linewidth=1.4, alpha=0.8, label=x_label)
+    # Rashed-Step 14.B-08-28-2026-end
+
     ax.set_xlabel(xlabel, fontsize=FONTSIZE_LABEL)
     ax.set_ylabel(ylabel, fontsize=FONTSIZE_LABEL)
     ax.set_title(title, fontsize=FONTSIZE_TITLE)
     ax.tick_params(axis="both", labelsize=FONTSIZE_TICK)
+
+    # Rashed-Step 14.B-08-28-2026-start
+    if xscale != "linear":
+        ax.set_xscale(xscale)
+    # Rashed-Step 14.B-08-28-2026-end
 
     if x_ticks_as_int:
         ax.set_xticks(list(x))

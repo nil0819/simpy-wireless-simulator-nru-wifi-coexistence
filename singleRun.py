@@ -137,6 +137,11 @@ def parse_traffic_class_mix(raw_values, label: str):
 @click.option("--sta-mobility-speed-mps", "sta_mobility_speed_mps", type=float, default=0.0, help="Wi-Fi STA walking speed (m/s), e.g. ~1.4 for a typical walking pace. See --ap-mobility-speed-mps.")
 @click.option("--ue-mobility-speed-mps", "ue_mobility_speed_mps", type=float, default=0.0, help="NR-U UE walking speed (m/s). See --ap-mobility-speed-mps.")
 @click.option("--mobility-pause-s", "mobility_pause_s", type=float, default=0.0, help="Dwell time (s) at each waypoint before picking the next one, for any node type with mobility enabled. 0.0 (default) = keep moving continuously between waypoints.")
+# Rashed-Step 14.D-08-28-2026-start
+@click.option("--gnb-mobility-linear-target", "gnb_mobility_linear_target", type=str, default=None, help="Deterministic directed gNB mobility: 'x,y' target position. The gNB moves in a straight line from --gnb-pos to this target over --gnb-mobility-linear-duration-s seconds, then holds there for the rest of the run - unlike --gnb-mobility-speed-mps's random-waypoint roaming, this gives a REPRODUCIBLE, precisely-timed transition (e.g. starting outside a sensing-range crossover distance and arriving inside it at a known time). Mutually exclusive with --gnb-mobility-speed-mps (fails fast if both are set).")
+@click.option("--gnb-mobility-linear-duration-s", "gnb_mobility_linear_duration_s", type=float, default=0.0, help="Duration (s) of the directed move above - required (and only meaningful) when --gnb-mobility-linear-target is set.")
+@click.option("--ue-follow-gnb-offset", "ue_follow_gnb_offset", type=str, default=None, help="'dx,dy' - the UE rigidly tracks its gNB's CURRENT position (however the gNB moves, or doesn't) plus this fixed offset, instead of its own independent placement/mobility. Guarantees the gNB-UE distance never changes, so their own link quality is unaffected by whatever mobility the gNB has. Mutually exclusive with --ue-mobility-speed-mps (fails fast if both are set).")
+# Rashed-Step 14.D-08-28-2026-end
 # Rashed-Step 5.G-02-06-2026-end
 # Rashed-Step 8.B-08-06-2026-start
 @click.option("--wifi-traffic-model", "wifi_traffic_model", type=click.Choice(["saturated", "poisson", "cbr"]), default="saturated", help="Wi-Fi traffic arrival model. saturated (default) = every AP always has a frame ready the instant it gets channel access, byte-identical to every pre-Step-8.B run. poisson/cbr = packets arrive per the given rate; the AP can genuinely sit idle with nothing to send.")
@@ -262,6 +267,11 @@ def single_run(
         # Rashed-Step 13.E.1-08-23-2026-start
         wifi_rate_adapt_ml_model: str = None,
         # Rashed-Step 13.E.1-08-23-2026-end
+        # Rashed-Step 14.D-08-28-2026-start
+        gnb_mobility_linear_target: str = None,
+        gnb_mobility_linear_duration_s: float = 0.0,
+        ue_follow_gnb_offset: str = None,
+        # Rashed-Step 14.D-08-28-2026-end
 ):
     backoffs = {key: {ap_number: 0} for key in range(wifi_cw_max + 1)}
     airtime_data = {"Station {}".format(i): 0 for i in range(1, ap_number + 1)}
@@ -273,6 +283,29 @@ def single_run(
     ap_positions = parse_pos_list(ap_pos, "--ap-pos") if ap_pos else None
     gnb_positions = parse_pos_list(gnb_pos, "--gnb-pos") if gnb_pos else None
     # Rashed-Step 5.A-02-06-2026-end
+
+    # Rashed-Step 14.D-08-28-2026-start
+    if gnb_mobility_linear_target and gnb_mobility_speed_mps > 0.0:
+        raise click.BadParameter(
+            "--gnb-mobility-linear-target and --gnb-mobility-speed-mps are "
+            "mutually exclusive - the gNB can have random-waypoint roaming "
+            "OR a directed linear move, not both."
+        )
+    if ue_follow_gnb_offset and ue_mobility_speed_mps > 0.0:
+        raise click.BadParameter(
+            "--ue-follow-gnb-offset and --ue-mobility-speed-mps are "
+            "mutually exclusive - the UE can have its own random-waypoint "
+            "roaming OR rigidly follow the gNB, not both."
+        )
+    gnb_mobility_linear_target_pos = (
+        parse_pos_list((gnb_mobility_linear_target,), "--gnb-mobility-linear-target")[0]
+        if gnb_mobility_linear_target else None
+    )
+    ue_follow_gnb_offset_pos = (
+        parse_pos_list((ue_follow_gnb_offset,), "--ue-follow-gnb-offset")[0]
+        if ue_follow_gnb_offset else None
+    )
+    # Rashed-Step 14.D-08-28-2026-end
 
     # Rashed-Step 10.A-08-07-2026-start
     # Empty tuple (default, no --wifi/nru-traffic-class-mix given) ->
@@ -423,6 +456,11 @@ def single_run(
                        # Rashed-Step 9.D-08-07-2026-start
                        export_packets_csv_path=export_packets_csv_path,
                        # Rashed-Step 9.D-08-07-2026-end
+                       # Rashed-Step 14.D-08-28-2026-start
+                       gnb_mobility_linear_target=gnb_mobility_linear_target_pos,
+                       gnb_mobility_linear_duration_s=gnb_mobility_linear_duration_s,
+                       ue_follow_gnb_offset=ue_follow_gnb_offset_pos,
+                       # Rashed-Step 14.D-08-28-2026-end
                        )
 
 
