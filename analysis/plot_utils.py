@@ -17,6 +17,27 @@ matplotlib.use("Agg")  # headless - this module never opens an interactive windo
 import matplotlib.pyplot as plt
 import numpy as np
 
+# Rashed-Step 14.J-08-30-2026-start
+# Rashed asked whether the figures use Times New Roman - they didn't
+# (matplotlib's default is DejaVu Sans, a sans-serif font), and asked
+# to switch. The actual "Times New Roman" font file is a proprietary
+# Microsoft font not present on this Linux sandbox, so this uses
+# "Liberation Serif" - a metrically-compatible, freely-licensed clone
+# of Times New Roman (same glyph widths/spacing, near-identical
+# appearance) commonly used as its drop-in substitute on Linux/LaTeX
+# toolchains, matching the serif look IEEE-style papers expect. Falls
+# back to "Nimbus Roman" (another Times-compatible URW clone) then
+# plain "serif" (whatever the system default serif is) if Liberation
+# Serif isn't installed in a given environment, so this degrades
+# gracefully rather than failing outright. Set globally via rcParams
+# once, at import time, so every figure this module produces (all 12
+# line-figures plus the 2 bar-chart figures) picks it up automatically
+# with no per-script change needed.
+plt.rcParams["font.family"] = "serif"
+plt.rcParams["font.serif"] = ["Liberation Serif", "Nimbus Roman", "Times New Roman", "serif"]
+plt.rcParams["mathtext.fontset"] = "stix"  # Times-like math glyphs, to match the text font
+# Rashed-Step 14.J-08-30-2026-end
+
 GENERATED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated")
 os.makedirs(GENERATED_DIR, exist_ok=True)
 
@@ -78,10 +99,10 @@ SERIES_STYLE: Dict[str, dict] = {
 LINEWIDTH = 2.2
 MARKERSIZE = 8
 MARKEREDGEWIDTH = 1.3
-FONTSIZE_LABEL = 13
+FONTSIZE_LABEL = 18
 FONTSIZE_TITLE = 14
-FONTSIZE_TICK = 11
-FONTSIZE_LEGEND = 11
+FONTSIZE_TICK = 16
+FONTSIZE_LEGEND = 14
 DPI = 300  # high resolution - safe for both print and screen viewing
 
 
