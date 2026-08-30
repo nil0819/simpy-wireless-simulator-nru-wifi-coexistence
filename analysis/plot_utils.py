@@ -43,15 +43,22 @@ NRU_COLOR = "#4b7248"
 # Rashed flagged that Wi-Fi's square ("s") and NR-U's diamond ("D")
 # markers looked too similar (both 4-sided) once every series across a
 # figure also shared linestyle conventions - asked for a shape family
-# that's unambiguous at a glance: rectangle/square for Wi-Fi, triangle
-# (or hexagon) for NR-U, used CONSISTENTLY for every Wi-Fi/NR-U variant
-# (Model, Simulated, Long TXOP) rather than a different shape per
-# variant - variants now differ only by linestyle (dashed vs solid),
-# never by marker shape, so "square=Wi-Fi"/"triangle=NR-U" holds
-# everywhere in this module, no exceptions.
-WIFI_MARKER = "s"  # square/rectangle
-NRU_MARKER = "^"   # triangle
+# that's unambiguous at a glance, used CONSISTENTLY for every Wi-Fi/
+# NR-U variant (Model, Simulated, Long TXOP) rather than a different
+# shape per variant - variants differ only by linestyle (dashed vs
+# solid), never by marker shape, so whichever Wi-Fi/NR-U shapes are
+# chosen hold everywhere in this module, no exceptions. Originally set
+# to square ("s") for Wi-Fi / triangle ("^") for NR-U - see Step 14.I
+# below for the follow-up change to the shapes actually in effect now.
 # Rashed-Step 14.H-08-29-2026-end
+# Rashed-Step 14.I-08-29-2026-start
+# Rashed asked to swap the shapes: triangle for Wi-Fi, hexagon for
+# NR-U (instead of 14.H's original square-for-Wi-Fi/triangle-for-NR-U).
+# Same "one shape per technology, every variant, no exceptions" rule
+# as 14.H - only the two shapes themselves changed.
+WIFI_MARKER = "^"  # triangle
+NRU_MARKER = "h"   # hexagon
+# Rashed-Step 14.I-08-29-2026-end
 SERIES_STYLE: Dict[str, dict] = {
     "Wi-Fi (Model)":     dict(color=WIFI_COLOR, marker=WIFI_MARKER, linestyle="--"),
     "Wi-Fi (Simulated)": dict(color=WIFI_COLOR, marker=WIFI_MARKER, linestyle="-"),
