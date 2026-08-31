@@ -121,7 +121,14 @@ def generate(w_values=W_VALUES, sim_time_s: float = 30.0, seed: int = 1,
             "NR-U":  [r["nru_throughput_mbps"] for r in results],
         },
         xlabel="Number of coexisting Wi-Fi APs (w)",
-        ylabel="Goodput throughput (Mbps)",
+        # Rashed-Step 14.K-08-30-2026-start
+        # Rashed pointed out "Goodput throughput" reads redundant (goodput
+        # already IS a throughput measure - see the module docstring/Step
+        # 14.A comment above for why it's computed as delivered-bytes-only,
+        # excluding retries/drops). Renamed the axis label to just
+        # "Goodput (Mbps)"; the underlying data/computation is unchanged.
+        ylabel="Goodput (Mbps)",
+        # Rashed-Step 14.K-08-30-2026-end
         title=title_suffix,
         output_stem=f"{output_stem_prefix}_throughput",
     )
